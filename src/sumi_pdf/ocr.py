@@ -43,9 +43,11 @@ def _ndlocr_src() -> str | None:
     cand = os.environ.get("SUMI_NDLOCR_SRC")
     if cand and os.path.isfile(os.path.join(cand, "ocr.py")):
         return cand
-    base = _repo_dir()
-    for rel in ("third_party/ndlocr-lite/src", os.path.join("third_party", "ndlocr-lite", "src")):
-        p = os.path.join(base, rel)
+    bases = [_repo_dir()]
+    if getattr(sys, "frozen", False):  # PyInstaller exe: look next to the exe
+        bases.append(os.path.dirname(sys.executable))
+    for base in bases:
+        p = os.path.join(base, "third_party", "ndlocr-lite", "src")
         if os.path.isfile(os.path.join(p, "ocr.py")):
             return p
     return None
