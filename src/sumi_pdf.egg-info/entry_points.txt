@@ -1,4 +1,0 @@
-[console_scripts]
-sumi-app = sumi_pdf.app:main
-sumi-mcp = sumi_pdf.mcp_server:main
-sumi-server = sumi_pdf.server:main

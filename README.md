@@ -1,6 +1,8 @@
 # SUMIPDF（墨）
 
-ローカル完結のPDF墨消し・文字置換・OCR・暗号化ツールキット。Windowsデスクトップアプリ（WebView2）＋MCPサーバ＋HTTP API。
+ローカル完結のPDF墨消し・文字置換・OCR・暗号化・ページ操作ツールキット。Windowsデスクトップアプリ（WebView2）＋MCPサーバ＋HTTP API。
+
+**ライセンス: MIT** — エンジンは pypdf(BSD) + pypdfium2(Apache/BSD) + reportlab(BSD) + Pillow(MIT-CMU)。AGPL成分なし（`THIRD-PARTY-NOTICES.md` 参照）。
 
 ## ライブリロード（SumatraPDF方式）
 - PDFは**メモリから開く**のでファイルをロックしない。Word等でPDFを上書き保存してもSUMIPDFは開いたまま
