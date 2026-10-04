@@ -1,0 +1,9 @@
+.venv/
+.venv-wsl/
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+tmp/
+.pytest_cache/

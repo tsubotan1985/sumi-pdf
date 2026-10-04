@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Sumi PDF</title>
+<style>
+  :root { --bg:#1b1d21; --fg:#e8e8e8; --acc:#d23; --panel:#26282d; }
+  body { margin:0; font-family:"Meiryo",system-ui,sans-serif; background:var(--bg); color:var(--fg); display:flex; height:100vh; }
+  #side { width:270px; background:var(--panel); padding:12px; box-sizing:border-box; overflow:auto; }
+  #side h1 { font-size:16px; margin:0 0 10px; }
+  #side label { font-size:12px; color:#aaa; display:block; margin:8px 0 2px; }
+  input[type=text] { width:100%; box-sizing:border-box; padding:5px; background:#17181b; color:var(--fg); border:1px solid #444; border-radius:4px; }
+  button { padding:6px 10px; margin:3px 2px 3px 0; background:#3a3d43; color:var(--fg); border:1px solid #555; border-radius:4px; cursor:pointer; font-size:12px; }
+  button.acc { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:hover { filter:brightness(1.15); }
+  #main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #bar { padding:6px 10px; background:var(--panel); display:flex; align-items:center; gap:6px; }
+  #wrap { flex:1; overflow:auto; text-align:center; position:relative; }
+  canvas { margin:10px auto; box-shadow:0 2px 14px #0008; cursor:crosshair; }
+  #msg { font-size:12px; color:#9bd; min-width:180px; text-align:right; }
+  #fontlist { font-size:11px; line-height:1.5; color:#bbb; white-space:pre-wrap; }
+  .hint { font-size:11px; color:#888; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>Sumi PDF <span style="color:#d23">墨</span></h1>
+  <label>PDF パス</label>
+  <input type="text" id="path" placeholder="C:\path\to.pdf">
+  <button onclick="openPdf()">開く</button>
+  <label>操作</label>
+  <button class="acc" onclick="doRedact()">墨消し実行（選択範囲）</button>
+  <button onclick="doReplace()">文字置換…</button>
+  <button onclick="doOcr()">OCR（このページ）</button>
+  <label>保存</label>
+  <input type="text" id="savepath" placeholder="空欄なら上書き保存">
+  <button onclick="doSave()">保存</button>
+  <label>フォントフォールバック（開いている文書）</label>
+  <div id="fontlist">-</div>
+  <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。</div>
+</div>
+<div id="main">
+  <div id="bar">
+    <button onclick="nav(-1)">◀</button>
+    <span id="pageno">-/-</span>
+    <button onclick="nav(1)">▶</button>
+    <select id="dpi" onchange="render()"><option>96</option><option selected>120</option><option>160</option><option>200</option></select>
+    <span id="msg"></span>
+  </div>
+  <div id="wrap"><canvas id="cv" width="10" height="10"></canvas></div>
+</div>
+<script>
+let pages=0, pno=0, scale=1, drag=null;
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d'), wrap=document.getElementById('wrap');
+function msg(t){document.getElementById('msg').textContent=t;}
+async function openPdf(){
+  const r=await fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:document.getElementById('path').value})});
+  if(!r.ok){msg(await r.text());return;}
+  const j=await r.json(); pages=j.pages; pno=0;
+  document.getElementById('fontlist').textContent=j.fonts.map(f=>f.name+(f.embedded?'':' (未埋込)')).join('\n')||'なし';
+  render();
+}
+async function render(){
+  if(!pages)return;
+  const dpi=+document.getElementById('dpi').value;
+  const r=await fetch(`/api/page/${pno}?dpi=${dpi}`);
+  if(!r.ok){msg(await r.text());return;}
+  const bmp=await createImageBitmap(await r.blob());
+  scale=dpi/72;
+  cv.width=bmp.width; cv.height=bmp.height;
+  ctx.drawImage(bmp,0,0);
+  document.getElementById('pageno').textContent=`${pno+1}/${pages}`;
+  msg('');
+}
+function nav(d){ if(pages){ pno=Math.min(pages-1,Math.max(0,pno+d)); render(); } }
+cv.addEventListener('mousedown',e=>{drag=[e.offsetX,e.offsetY,e.offsetX,e.offsetY];});
+cv.addEventListener('mousemove',e=>{ if(!drag)return; drag[2]=e.offsetX; drag[3]=e.offsetY; render().then(drawDrag); });
+cv.addEventListener('mouseup',()=>{ if(drag) drawDrag(); });
+function drawDrag(){ if(!drag)return; ctx.save(); ctx.strokeStyle='#d23'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+  ctx.strokeRect(Math.min(drag[0],drag[2]),Math.min(drag[1],drag[3]),Math.abs(drag[2]-drag[0]),Math.abs(drag[3]-drag[1])); ctx.restore(); }
+function selRect(){ if(!drag) return null;
+  const x0=Math.min(drag[0],drag[2])/scale, y0=Math.min(drag[1],drag[3])/scale;
+  const x1=Math.max(drag[0],drag[2])/scale, y1=Math.max(drag[1],drag[3])/scale;
+  if(x1-x0<3||y1-y0<3) return null; return [x0,y0,x1,y1]; }
+async function doRedact(){
+  const rect=selRect(); if(!rect){msg('範囲をドラッグしてください');return;}
+  const r=await fetch('/api/redact',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page:pno,rects:[rect]})});
+  msg(r.ok?'墨消ししました':'ERR '+await r.text()); drag=null; render();
+}
+async function doReplace(){
+  const f=prompt('置換したい文字列（このページ内）'); if(!f)return;
+  const t=prompt('置換後の文字列'); if(t==null)return;
+  const r=await fetch('/api/replace',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page:pno,find:f,replace:t})});
+  const j=await r.json(); msg(r.ok?`${j.replaced}件置換 (font:${(j.font||'').split(/[\\/]/).pop()})`:'ERR '+await r.text());
+  drag=null; render();
+}
+async function doOcr(){
+  const r=await fetch(`/api/ocr/${pno}`,{method:'POST'});
+  const j=await r.json(); msg(r.ok?(j.engine+'：'+j.text.slice(0,60)+'…'):'ERR '+await r.text());
+}
+async function doSave(){
+  const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path:document.getElementById('savepath').value||null})});
+  const j=await r.json(); msg(r.ok?('保存: '+j.saved):'ERR '+await r.text());
+}
+</script>
+</body>
+</html>
