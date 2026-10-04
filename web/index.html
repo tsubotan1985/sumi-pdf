@@ -53,6 +53,12 @@
   <button onclick="doPagesDelete()">現在ページを削除</button>
   <button onclick="doInsert()">PDFを追加…</button>
   <button onclick="doSplit()">全ページ分割保存</button>
+  <label>その他（Stirling機能）</label>
+  <button onclick="doCompress()">圧縮して別名保存</button>
+  <button onclick="doWatermark()">透かし追加…</button>
+  <button onclick="doPageNumbers()">ページ番号を付与</button>
+  <button onclick="doSanitize()">個人情報除去（Sanitize）</button>
+  <button onclick="doImgRedact()">選択範囲の画像も完全消去</button>
   <label>フォントフォールバック（開いている文書）</label>
   <div id="fontlist">-</div>
   <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。<br>ファイルはロックしない。他アプリが上書き保存すると自動で再読込（未保存編集がある場合は警告）。</div>
@@ -184,6 +190,32 @@ async function doInsert(){
 async function doSplit(){
   const r=await fetch('/api/split',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   const j=await r.json(); msg(r.ok?('分割: '+j.files.length+'ファイル'):'ERR '+await r.text());
+}
+async function doCompress(){
+  const r=await fetch('/api/compress',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const j=await r.json(); msg(r.ok?(`圧縮: ${j.before}→${j.after}バイト (${Math.round(j.ratio*100)}%) ${j.out}`):'ERR '+await r.text());
+}
+async function doWatermark(){
+  const t=prompt('透かしテキスト','CONFIDENTIAL'); if(!t)return;
+  const r=await fetch('/api/watermark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno,text:t})});
+  msg(r.ok?'透かし追加（保存で反映）':'ERR '+await r.text()); render();
+}
+async function doPageNumbers(){
+  const r=await fetch('/api/page-numbers',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const j=await r.json(); msg(r.ok?('ページ番号: '+j.out):'ERR '+await r.text());
+}
+async function doSanitize(){
+  if(!confirm('JavaScript・添付ファイル・メタデータを除去した複製を作りますか？'))return;
+  const r=await fetch('/api/sanitize',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const j=await r.json(); msg(r.ok?('Sanitize: '+j.out+' (js:'+j.js+' files:'+j.files+' meta:'+j.meta+')'):'ERR '+await r.text());
+}
+async function doImgRedact(){
+  if(!drag||!drag.done){msg('先に画像を消したい範囲をドラッグ');return;}
+  const [x0,y0,x1,y1]=drag.rect;
+  const r=await fetch('/api/img-redact',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page:pno,rects:[[Math.min(x0,x1),Math.min(y0,y1),Math.max(x0,x1),Math.max(y0,y1)]]})});
+  const j=await r.json(); msg(r.ok?(`画像画素を完全消去 (${j.edited.length}画像)`):'ERR '+await r.text());
+  render();
 }
 </script>
 </body>

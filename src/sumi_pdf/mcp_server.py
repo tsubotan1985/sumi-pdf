@@ -74,6 +74,54 @@ TOOLS = [
      "inputSchema": {"type": "object",
                      "properties": {"path": {"type": "string"}, "password": {"type": "string"}},
                      "required": ["path"]}},
+    {"name": "img_redact_pdf",
+     "description": "Destructively blank pixels inside rects in the page's embedded images (true data removal).",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "page": {"type": "integer"},
+                                    "rects": {"type": "array", "items": {"type": "array",
+                                                                          "items": {"type": "number"}}},
+                                    "out_path": {"type": "string"}, "fill_rgb": {"type": "array"}},
+                     "required": ["path", "page", "rects"]}},
+    {"name": "compress_pdf",
+     "description": "Recompress images and streams; smaller file. image_quality 1-100.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "image_quality": {"type": "integer"}, "grayscale": {"type": "boolean"}},
+                     "required": ["path"]}},
+    {"name": "watermark_pdf",
+     "description": "Overlay diagonal text watermark on a page (saved on out_path).",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "page": {"type": "integer"}, "text": {"type": "string"},
+                                    "opacity": {"type": "number"}, "angle": {"type": "integer"}},
+                     "required": ["path", "text"]}},
+    {"name": "page_numbers_pdf",
+     "description": "Stamp page numbers on all pages (fmt like '{n} / {total}').",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "fmt": {"type": "string"}, "pos": {"type": "string"},
+                                    "start": {"type": "integer"}},
+                     "required": ["path"]}},
+    {"name": "get_metadata",
+     "description": "Read document info dictionary.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "set_metadata",
+     "description": "Set Title/Author/Subject/Keywords/Creator/Producer; value null deletes.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "fields": {"type": "object"}},
+                     "required": ["path", "fields"]}},
+    {"name": "sanitize_pdf",
+     "description": "Strip JavaScript / embedded files / metadata (/ links / annotations) to a cleaned copy.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "remove_js": {"type": "boolean"},
+                                    "remove_embedded_files": {"type": "boolean"},
+                                    "remove_metadata": {"type": "boolean"},
+                                    "remove_links": {"type": "boolean"},
+                                    "remove_annotations": {"type": "boolean"}},
+                     "required": ["path"]}},
 ]
 
 
@@ -107,6 +155,7 @@ def handle(method: str, params: dict, pid) -> str | None:
         try:
             from . import edit as E, pdfio as P
             from . import redact as R, textedit as T
+            from . import stirling as ST
             from .ocr import ocr_page
             if name == "inspect_fonts":
                 fonts = P.font_inventory(_read(a["path"]))
@@ -154,6 +203,51 @@ def handle(method: str, params: dict, pid) -> str | None:
                 from . import crypto as C
                 return _ok(pid, _text_result(json.dumps(
                     C.inspect(a["path"], a.get("password", "")), ensure_ascii=False)))
+            if name == "img_redact_pdf":
+                from . import imgredact as IR
+                r = IR.remove_pixels(_read(a["path"]), a["page"],
+                                     [tuple(x) for x in a["rects"]],
+                                     fill=tuple(a.get("fill_rgb") or [255, 255, 255]))
+                saved = _save(r["bytes"], a.get("out_path") or a["path"]) if r.get("bytes") else a["path"]
+                return _ok(pid, _text_result(json.dumps(
+                    {"edited": r["edited"], "saved": saved}, ensure_ascii=False)))
+            if name == "compress_pdf":
+                r = ST.compress(_read(a["path"]), a.get("out_path") or
+                                os.path.splitext(a["path"])[0] + "-c.pdf",
+                                image_quality=int(a.get("image_quality", 70)),
+                                grayscale=bool(a.get("grayscale", False)))
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
+            if name == "watermark_pdf":
+                out = a.get("out_path") or a["path"]
+                d2 = ST.watermark(_read(a["path"]), int(a.get("page", 0)),
+                                  a["text"], opacity=float(a.get("opacity", 0.15)),
+                                  angle=int(a.get("angle", 45)))
+                saved = _save(d2, out)
+                return _ok(pid, _text_result(json.dumps({"saved": saved}, ensure_ascii=False)))
+            if name == "page_numbers_pdf":
+                r = ST.page_numbers(_read(a["path"]), a.get("out_path") or
+                                    os.path.splitext(a["path"])[0] + "-num.pdf",
+                                    fmt=a.get("fmt", "{n} / {total}"),
+                                    pos=a.get("pos", "bottom-center"),
+                                    start=int(a.get("start", 1)))
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
+            if name == "get_metadata":
+                return _ok(pid, _text_result(json.dumps(
+                    ST.get_metadata(_read(a["path"])), ensure_ascii=False)))
+            if name == "set_metadata":
+                r = ST.set_metadata(_read(a["path"]), a.get("out_path") or
+                                    os.path.splitext(a["path"])[0] + "-meta.pdf",
+                                    **(a.get("fields") or {}))
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
+            if name == "sanitize_pdf":
+                r = ST.sanitize(_read(a["path"]), a.get("out_path") or
+                                os.path.splitext(a["path"])[0] + "-clean.pdf",
+                                remove_js=bool(a.get("remove_js", True)),
+                                remove_embedded_files=bool(a.get("remove_embedded_files", True)),
+                                remove_metadata=bool(a.get("remove_metadata", True)),
+                                remove_links=bool(a.get("remove_links", False)),
+                                remove_annotations=bool(a.get("remove_annotations", False)))
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
             return _err(pid, -32601, f"unknown tool: {name}")
         except Exception as e:  # tool error -> isError result
             return _ok(pid, {"content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],

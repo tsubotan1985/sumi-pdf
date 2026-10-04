@@ -20,6 +20,7 @@ from . import edit as E
 from . import pages as PG
 from . import pdfio as P
 from . import redact as R
+from . import stirling as ST
 from . import textedit as T
 from . import textlayer
 from .ocr import detect_engines, ocr_page
@@ -384,6 +385,114 @@ def pages_split(req: SplitReq):
     out_dir = req.out_dir or (os.path.dirname(S["path"]) if S["path"] else ".")
     base = req.base or (os.path.splitext(os.path.basename(S["path"]))[0] if S["path"] else "page")
     return {"files": PG.split(data, out_dir, base)}
+
+
+# ---------------- image pixel redaction (true data removal) ----------------
+
+class ImgRedactReq(BaseModel):
+    page: int
+    rects: list[list[float]]
+    fill: list[int] = [255, 255, 255]
+
+
+@app.post("/api/img-redact")
+def img_redact(req: ImgRedactReq):
+    """Blank pixels inside rects in the page's embedded images (destructive)."""
+    data = _require()
+    if not 0 <= req.page < S["n"]:
+        raise HTTPException(404, "page out of range")
+    from . import imgredact as IR
+    r = IR.remove_pixels(data, req.page, [tuple(x) for x in req.rects],
+                         fill=tuple(req.fill))
+    if r.get("bytes"):
+        S["work"], S["dirty"] = r["bytes"], True
+    return {"edited": r["edited"], "rects": r["rects"]}
+
+
+# ---------------- Stirling-parity utilities ----------------
+
+class CompressReq(BaseModel):
+    out_path: str | None = None
+    image_quality: int = 70
+    grayscale: bool = False
+
+
+@app.post("/api/compress")
+def do_compress(req: CompressReq):
+    data = _require()
+    out = req.out_path or (os.path.splitext(S["path"] or "out")[0] + "-c.pdf")
+    return ST.compress(data, out, image_quality=req.image_quality,
+                       grayscale=req.grayscale)
+
+
+class WatermarkReq(BaseModel):
+    page: int = 0
+    text: str = "CONFIDENTIAL"
+    opacity: float = 0.15
+    angle: int = 45
+    size: float = 60.0
+
+
+@app.post("/api/watermark")
+def do_watermark(req: WatermarkReq):
+    data = _require()
+    S["work"] = ST.watermark(data, req.page, req.text, opacity=req.opacity,
+                             angle=req.angle, size=req.size)
+    S["dirty"] = True
+    return {"watermarked": req.text}
+
+
+class PageNumbersReq(BaseModel):
+    out_path: str | None = None
+    fmt: str = "{n} / {total}"
+    pos: str = "bottom-center"
+    size: float = 10.0
+    start: int = 1
+
+
+@app.post("/api/page-numbers")
+def do_page_numbers(req: PageNumbersReq):
+    data = _require()
+    out = req.out_path or (os.path.splitext(S["path"] or "out")[0] + "-num.pdf")
+    return ST.page_numbers(data, out, fmt=req.fmt, pos=req.pos, size=req.size,
+                           start=req.start)
+
+
+@app.get("/api/metadata")
+def get_meta():
+    return ST.get_metadata(_require())
+
+
+class MetaReq(BaseModel):
+    out_path: str | None = None
+    fields: dict
+
+
+@app.post("/api/metadata")
+def set_meta(req: MetaReq):
+    data = _require()
+    out = req.out_path or (os.path.splitext(S["path"] or "out")[0] + "-meta.pdf")
+    return ST.set_metadata(data, out, **req.fields)
+
+
+class SanitizeReq(BaseModel):
+    out_path: str | None = None
+    remove_js: bool = True
+    remove_embedded_files: bool = True
+    remove_metadata: bool = True
+    remove_links: bool = False
+    remove_annotations: bool = False
+
+
+@app.post("/api/sanitize")
+def do_sanitize(req: SanitizeReq):
+    data = _require()
+    out = req.out_path or (os.path.splitext(S["path"] or "out")[0] + "-clean.pdf")
+    return ST.sanitize(data, out, remove_js=req.remove_js,
+                       remove_embedded_files=req.remove_embedded_files,
+                       remove_metadata=req.remove_metadata,
+                       remove_links=req.remove_links,
+                       remove_annotations=req.remove_annotations)
 
 
 def main():
