@@ -39,7 +39,7 @@ def main():
         target=lambda: uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning"),
         daemon=True).start()
     time.sleep(0.3)
-    webview.create_window("Sumi PDF", f"http://127.0.0.1:{port}/",
+    webview.create_window("SUMIPDF", f"http://127.0.0.1:{port}/",
                           width=1280, height=860, min_size=(960, 640))
     webview.start()
 

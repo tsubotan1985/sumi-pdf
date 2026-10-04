@@ -24,10 +24,11 @@
 </head>
 <body>
 <div id="side">
-  <h1>Sumi PDF <span style="color:#d23">墨</span></h1>
+  <h1>SUMIPDF <span style="color:#d23">墨</span></h1>
   <label>PDF パス</label>
   <input type="text" id="path" placeholder="C:\path\to.pdf">
   <button onclick="openPdf()">開く</button>
+  <label><input type="checkbox" id="autoreload" checked> 外部更新を自動再読込（Sumatra風）</label>
   <label>操作</label>
   <button class="acc" onclick="doRedact()">墨消し実行（選択範囲）</button>
   <button onclick="doReplace()">文字置換…</button>
@@ -49,7 +50,7 @@
   <button onclick="doSave()">保存</button>
   <label>フォントフォールバック（開いている文書）</label>
   <div id="fontlist">-</div>
-  <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。</div>
+  <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。<br>ファイルはロックしない。他アプリが上書き保存すると自動で再読込（未保存編集がある場合は警告）。</div>
 </div>
 <div id="main">
   <div id="bar">
@@ -62,16 +63,34 @@
   <div id="wrap"><canvas id="cv" width="10" height="10"></canvas></div>
 </div>
 <script>
-let pages=0, pno=0, scale=1, drag=null;
+let pages=0, pno=0, scale=1, drag=null, lastStat=null, dirtyNotified=false;
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d'), wrap=document.getElementById('wrap');
 function msg(t){document.getElementById('msg').textContent=t;}
 async function openPdf(){
   const r=await fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:document.getElementById('path').value})});
   if(!r.ok){msg(await r.text());return;}
-  const j=await r.json(); pages=j.pages; pno=0;
+  const j=await r.json(); pages=j.pages; pno=0; lastStat=j.stat; dirtyNotified=false;
   document.getElementById('fontlist').textContent=j.fonts.map(f=>f.name+(f.embedded?'':' (未埋込)')).join('\n')||'なし';
   render();
 }
+async function checkExternalUpdate(){
+  if(!pages || !document.getElementById('autoreload').checked) return;
+  let fi; try { fi=await (await fetch('/api/fileinfo')).json(); } catch { return; }
+  if(fi.disk.missing){ msg('⚠ ファイルが移動/削除されました'); return; }
+  if(lastStat && fi.disk.mtime===lastStat.mtime && fi.disk.size===lastStat.size) { dirtyNotified=false; return; }
+  if(fi.dirty){
+    if(!dirtyNotified){ msg('⚠ 他アプリがPDFを更新。未保存の編集があります→保存 or 再度「開く」'); dirtyNotified=true; }
+    return;
+  }
+  const r=await fetch('/api/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno})});
+  if(!r.ok) return;
+  const j=await r.json();
+  const wasDirty=fi.dirty;
+  pages=j.pages; pno=j.page; lastStat=j.stat;
+  msg('↻ 他アプリによる更新を検出、再読み込みしました');
+  render();
+}
+setInterval(checkExternalUpdate, 2000);
 async function render(){
   if(!pages)return;
   const dpi=+document.getElementById('dpi').value;
@@ -140,6 +159,7 @@ async function doSave(){
   const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({path:document.getElementById('savepath').value||null})});
   const j=await r.json(); msg(r.ok?('保存: '+j.saved):'ERR '+await r.text());
+  if(r.ok && j.stat){ lastStat=j.stat; dirtyNotified=false; }
 }
 </script>
 </body>
