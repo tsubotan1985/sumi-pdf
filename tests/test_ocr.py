@@ -34,7 +34,7 @@ def test_no_engine_raises_clean(tmp_path):
         pytest.skip("tesseract installed; error path not reachable")
     p = str(tmp_path / "x.pdf")
     d = fitz.open(); d.new_page(); d.save(p); d.close()
-    with pytest.raises(RuntimeError, match="tesseract not found"):
+    with pytest.raises(RuntimeError, match="no OCR engine"):
         ocr_page(p, 0)
 
 

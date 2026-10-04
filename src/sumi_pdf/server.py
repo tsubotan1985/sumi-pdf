@@ -12,6 +12,7 @@ from . import fonts as F
 from . import redact as R
 from . import textedit as T
 from . import textlayer
+from . import crypto as C
 from .ocr import detect_engines, ocr_page
 
 app = FastAPI(title="Sumi PDF")
@@ -157,6 +158,40 @@ def do_ocr_layer(req: OcrLayerReq):
     n = textlayer.add_layer_doc(S["doc"], req.page, r["words"])
     return {"words": len(r["words"]), "inserted": n, "lang": r["lang"],
             "text_head": r["text"][:200]}
+
+
+class EncryptReq(BaseModel):
+    user_pw: str = ""
+    owner_pw: str = ""
+    algorithm: str = "aes-256"
+    out_path: str | None = None
+    allow: dict = {}
+
+
+class DecryptReq(BaseModel):
+    password: str = ""
+    out_path: str | None = None
+
+
+@app.post("/api/encrypt")
+def do_encrypt(req: EncryptReq):
+    if not S["path"]:
+        raise HTTPException(400, "no document open")
+    try:
+        return C.encrypt_pdf(S["path"], req.out_path or "", req.user_pw, req.owner_pw,
+                             req.algorithm, req.allow)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/decrypt")
+def do_decrypt(req: DecryptReq):
+    if not S["path"]:
+        raise HTTPException(400, "no document open")
+    try:
+        return C.decrypt_pdf(S["path"], req.out_path or "", req.password)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
 
 
 def main():

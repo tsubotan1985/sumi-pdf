@@ -53,6 +53,25 @@ TOOLS = [
      "inputSchema": {"type": "object",
                      "properties": {"path": {"type": "string"}, "page": {"type": "integer"}},
                      "required": ["path", "page"]}},
+    {"name": "encrypt_pdf",
+     "description": "Set AES-256 password + permissions. allow: {print,copy,modify,annotate,forms}",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "user_pw": {"type": "string"}, "owner_pw": {"type": "string"},
+                                    "algorithm": {"type": "string", "enum": ["aes-256", "aes-128"]},
+                                    "allow": {"type": "object"}},
+                     "required": ["path", "user_pw"]}},
+    {"name": "decrypt_pdf",
+     "description": "Remove PDF encryption with the open/owner password.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "out_path": {"type": "string"},
+                                    "password": {"type": "string"}},
+                     "required": ["path"]}},
+    {"name": "pdf_permissions",
+     "description": "Encrypted? and effective permission flags of a PDF.",
+     "inputSchema": {"type": "object",
+                     "properties": {"path": {"type": "string"}, "password": {"type": "string"}},
+                     "required": ["path"]}},
 ]
 
 
@@ -118,6 +137,20 @@ def handle(method: str, params: dict, pid) -> str | None:
             if name == "ocr_pdf_page":
                 return _ok(pid, _text_result(json.dumps(ocr_page(a["path"], a["page"]),
                                                          ensure_ascii=False)))
+            if name == "encrypt_pdf":
+                from .crypto import encrypt_pdf
+                r = encrypt_pdf(a["path"], a.get("out_path") or "", a.get("user_pw", ""),
+                                a.get("owner_pw", ""), a.get("algorithm", "aes-256"),
+                                a.get("allow") or None)
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
+            if name == "decrypt_pdf":
+                from .crypto import decrypt_pdf
+                r = decrypt_pdf(a["path"], a.get("out_path") or "", a.get("password", ""))
+                return _ok(pid, _text_result(json.dumps(r, ensure_ascii=False)))
+            if name == "pdf_permissions":
+                from .crypto import pdf_permissions
+                return _ok(pid, _text_result(json.dumps(
+                    pdf_permissions(a["path"], a.get("password", "")), ensure_ascii=False)))
             return _err(pid, -32601, f"unknown tool: {name}")
         except Exception as e:  # tool error -> isError result
             return _ok(pid, {"content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],

@@ -11,12 +11,13 @@
 - **HTTP API**: `sumi-server`（127.0.0.1:8765）
 
 ## OCR
-- エンジン: tesseract 5（jpn + jpn_vert、同梱 tessdata は tessdata_fast）
-- 探索順: `SUMI_TESSERACT` env → PATH → `~/.pixi/bin/tesseract` → `C:\Program Files\Tesseract-OCR\tesseract.exe`
+- エンジン2種: **NDLOCR-Lite**（国立国会図書館・縦書き/手書き/古典対応、CC-BY-4.0。`third_party/ndlocr-lite/` にソース同梱、モデル同梱、依存は requirements-ndl.txt）と **tesseract 5**（jpn/jpn_vert、同梱 tessdata は tessdata_fast）
+- Sumi UI のOCR言語: 自動（横/縦判定・tesseract）/ jpn / jpn_vert / **ndl**（NDLOCR-Lite明示）
+- tesseract 探索順: `SUMI_TESSERACT` env → PATH → `~/.pixi/bin/tesseract` → `C:\Program Files\Tesseract-OCR\tesseract.exe`
 - WSL: `~/.pixi/bin/pixi global install tesseract`（済）。Windows: `winget install UB-Mannheim.TesseractOCR`
-- 精度を上げたい場合: [tessdata_best](https://github.com/tesseract-ocr/tessdata_best) の jpn/jpn_vert を `tools/tessdata/` に上書き（fastより約3倍のサイズ）
-- 「検索可能レイヤー追加」: OCR結果を不可視テキスト（render_mode=3）として同一座標に埋め込み → スキャンPDFが検索・コピー可能になる
-- NDLOCR-Lite（縦書き・手書き特化）は実験的フック `SUMI_OCRLITE_SRC`（ndl-lab/ndlocr-lite の clone + 依存導入済みディレクトリ）
+- 精度を上げたい場合: [tessdata_best](https://github.com/tesseract-ocr/tessdata_best) の jpn/jpn_vert を `tools/tessdata/` に上書き
+- 「検索可能レイヤー追加」: OCR結果（tesseract・語bbox）を不可視テキスト（render_mode=3）として同一座標に埋め込み
+- NDLOCR-Lite 単体CLI: `cd third_party/ndlocr-lite/src && python ocr.py --sourcepdf 入力.pdf --pdf-output 出力.pdf --output out/`（PDF直接入力＋テキスト層PDF一発生成にも対応）
 
 ## 実行（Windows）
 ```

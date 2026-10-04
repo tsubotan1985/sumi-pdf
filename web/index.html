@@ -36,10 +36,14 @@
     <option value="auto">自動（横/縦判定）</option>
     <option value="jpn">横書き (jpn)</option>
     <option value="jpn_vert">縦書き (jpn_vert)</option>
+    <option value="ndl">NDLOCR-Lite（縦書き・手書き高精度）</option>
   </select>
   <button onclick="doOcr()">OCR実行（このページ）</button>
   <button onclick="doOcrLayer()">検索可能レイヤー追加</button>
   <pre id="ocrout" style="max-height:180px;overflow:auto;font-size:11px;background:#17181b;padding:6px;border-radius:4px;white-space:pre-wrap;display:none"></pre>
+  <label>暗号化</label>
+  <button onclick="doEncrypt()">パスワード設定（AES-256）</button>
+  <button onclick="doDecrypt()">パスワード解除</button>
   <label>保存</label>
   <input type="text" id="savepath" placeholder="空欄なら上書き保存">
   <button onclick="doSave()">保存</button>
@@ -117,6 +121,20 @@ async function doOcrLayer(){
   const j=await r.json();
   msg(r.ok?`レイヤー追加 ${j.inserted}/${j.words}語 (lang=${j.lang})。保存で確定`:'ERR '+(j.detail||''));
   render();
+}
+async function doEncrypt(){
+  const up=prompt('ユーザーパスワード（開くときに要求）'); if(up==null||!up)return;
+  const op=prompt('オーナーパスワード（権限変更用・空なら同パスワード）')||'';
+  const copy=confirm('コピーを許可しますか？ OK=許可 / キャンセル=禁止');
+  const r=await fetch('/api/encrypt',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user_pw:up,owner_pw:op,allow:{copy:copy,modify:false,print:true,annotate:true,forms:true}})});
+  const j=await r.json(); msg(r.ok?('暗号化保存: '+j.saved):'ERR '+(j.detail||''));
+}
+async function doDecrypt(){
+  const pw=prompt('パスワード（空欄なら owner-only PDF）')||'';
+  const r=await fetch('/api/decrypt',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:pw})});
+  const j=await r.json(); msg(r.ok?('復号保存: '+j.saved):'ERR '+(j.detail||''));
 }
 async function doSave(){
   const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},

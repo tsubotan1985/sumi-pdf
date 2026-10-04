@@ -7,3 +7,4 @@ build/
 *.spec
 tmp/
 .pytest_cache/
+third_party/

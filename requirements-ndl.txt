@@ -1,0 +1,14 @@
+# NDLOCR-Lite engine deps (ndl-lab/ndlocr-lite, CC-BY-4.0) - install into the app venv
+lxml>=5.4,<6
+networkx>=3.3,<4
+ordered-set>=4.1,<5
+protobuf>=6.31,<7
+PyYAML>=6.0.1,<7
+tqdm>=4.66,<5
+pypdfium2>=4.30,<5
+numpy>=2.2,<3
+opencv-python-headless>=4.11,<5
+onnxruntime>=1.26,<2
+pypdf>=6.4,<7
+cryptography>=46,<47
+dill>=0.3.8,<0.4

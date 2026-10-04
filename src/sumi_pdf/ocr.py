@@ -1,16 +1,12 @@
-"""OCR: local engines. v0.2 ships tesseract (jpn + jpn_vert, tessdata_fast bundled).
+"""OCR: local engines. v0.3 ships tesseract AND NDLOCR-Lite (source bundle).
 
-Engine detection order (tesseract):
-  1. SUMI_TESSERACT env (path to binary)
-  2. shutil.which("tesseract")
-  3. ~/.pixi/bin/tesseract            (pixi global install)
-  4. Windows: C:\\Program Files\\Tesseract-OCR\\tesseract.exe (+ x86)
+Engine selection order:
+  1. NDLOCR-Lite (third_party/ndlocr-lite/src/ocr.py, CPU onnxruntime; Win/Mac/Linux)
+     - override dir with SUMI_NDLOCR_SRC; engine forced with lang="ndl"
+  2. tesseract (jpn/jpn_vert bundled tessdata_fast; see tools/tessdata)
+     - SUMI_TESSERACT env -> PATH -> ~/.pixi/bin/tesseract -> Program Files
 
-tessdata: repo tools/tessdata (jpn/jpn_vert/eng/osd, tessdata_fast) used via
---tessdata-dir when present; otherwise the binary's default.
-
-NDLOCR-Lite: optional experimental hook via SUMI_OCRLITE_SRC (checkout of
-ndl-lab/ndlocr-lite with deps installed); run through its src/ocr.py.
+tesseract lang: "auto" duels jpn vs jpn_vert by mean confidence.
 """
 from __future__ import annotations
 
@@ -43,8 +39,23 @@ def _repo_dir() -> str:
     return d
 
 
+def _ndlocr_src() -> str | None:
+    cand = os.environ.get("SUMI_NDLOCR_SRC")
+    if cand and os.path.isfile(os.path.join(cand, "ocr.py")):
+        return cand
+    base = _repo_dir()
+    for rel in ("third_party/ndlocr-lite/src", os.path.join("third_party", "ndlocr-lite", "src")):
+        p = os.path.join(base, rel)
+        if os.path.isfile(os.path.join(p, "ocr.py")):
+            return p
+    return None
+
+
 def detect_engines() -> dict:
     out = {"tesseract": None, "tessdata": None, "ndlocr_src": None}
+    ndl = _ndlocr_src()
+    if ndl:
+        out["ndlocr_src"] = ndl
     cand = os.environ.get("SUMI_TESSERACT")
     if cand and os.path.isfile(cand):
         out["tesseract"] = cand
@@ -62,9 +73,6 @@ def detect_engines() -> dict:
     base = os.environ.get("SUMI_TESSDATA") or os.path.join(_repo_dir(), "tools", "tessdata")
     if os.path.isfile(os.path.join(base, "jpn.traineddata")):
         out["tessdata"] = base
-    src = os.environ.get("SUMI_OCRLITE_SRC")
-    if src and os.path.isfile(os.path.join(src, "ocr.py")):
-        out["ndlocr_src"] = src
     return out
 
 
@@ -75,6 +83,28 @@ def _render_png(doc, page_no: int, dpi: int = 300) -> str:
     pm.save(path)
     return path
 
+
+# ---------------- NDLOCR-Lite ----------------
+
+def _run_ndlocr(src_dir: str, img: str, timeout: int = 1800) -> str:
+    """Run NDLOCR-Lite ocr.py on one image; return concatenated text."""
+    outdir = tempfile.mkdtemp(prefix="sumi_ndl_")
+    cmd = [sys.executable, "ocr.py", "--sourceimg", img, "--output", outdir]
+    env = {**os.environ, "PYTHONPATH": src_dir, "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run(cmd, cwd=src_dir, capture_output=True, text=True,
+                       timeout=timeout, env=env, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise RuntimeError(f"ndlocr-lite failed: {(r.stderr or r.stdout).strip()[-400:]}")
+    txt = []
+    for root, _dirs, files in os.walk(outdir):
+        for f in files:
+            if f.endswith((".txt", ".md")):
+                txt.append(open(os.path.join(root, f), encoding="utf-8",
+                                errors="replace").read())
+    return "\n".join(txt).strip()
+
+
+# ---------------- tesseract ----------------
 
 def _run_tsv(tess: str, png: str, lang: str, tessdata: str | None) -> str:
     cmd = [tess, png, "stdout", "-l", lang, "--psm", "1", "tsv"]
@@ -108,7 +138,6 @@ def parse_tsv(tsv: str, dpi: int = 300) -> tuple[str, list[dict]]:
                       "bbox": [round(l * sc, 1), round(t * sc, 1),
                                round((l + w) * sc, 1), round((t + h) * sc, 1)]})
         lines.append((int(row[2]), int(row[4]), text))
-    # rebuild reading order text from line grouping
     ordered, last = [], None
     for _b, ln, txt in lines:
         if last is not None and ln != last:
@@ -124,29 +153,33 @@ def _mean_conf(words) -> float:
 
 def ocr_page(pdf_path: str, page_no: int, lang: str = "auto", dpi: int = 300) -> dict:
     eng = detect_engines()
-    if not eng["tesseract"]:
-        raise RuntimeError(
-            "tesseract not found. Install: WSL `~/.pixi/bin/pixi global install tesseract` "
-            "/ Windows `winget install UB-Mannheim.TesseractOCR`. "
-            "jpn/jpn_vert traineddata: repo tools/tessdata (bundled).")
     doc = fitz.open(pdf_path)
     try:
         png = _render_png(doc, page_no, dpi)
     finally:
         doc.close()
-    tess, td = eng["tesseract"], eng["tessdata"]
     try:
+        if lang == "ndl":
+            src = eng["ndlocr_src"]
+            if src is None:
+                raise RuntimeError(
+                    "NDLOCR-Lite not found. Clone ndl-lab/ndlocr-lite to "
+                    "third_party/ndlocr-lite (deps auto-installed).")
+            text = _run_ndlocr(src, png)
+            return {"text": text, "words": [], "engine": "ndlocr-lite", "lang": "ndl"}
+        if not eng["tesseract"]:
+            raise RuntimeError(
+                "no OCR engine. NDLOCR-Lite: put source at third_party/ndlocr-lite/src "
+                "| tesseract: pixi global install / winget install UB-Mannheim.TesseractOCR")
+        tess, td = eng["tesseract"], eng["tessdata"]
         if lang in ("jpn", "jpn_vert"):
-            tsv = _run_tsv(tess, png, lang, td)
-            text, words = parse_tsv(tsv, dpi)
+            text, words = parse_tsv(_run_tsv(tess, png, lang, td), dpi)
             return {"text": text, "words": words, "engine": "tesseract", "lang": lang}
-        # auto: decide horizontal/vertical by confidence duel (jpn first)
         tsv = _run_tsv(tess, png, "jpn", td)
         text, words = parse_tsv(tsv, dpi)
         best = ("jpn", text, words, _mean_conf(words))
         if len(words) == 0 or best[3] < 70:
-            tsv2 = _run_tsv(tess, png, "jpn_vert", td)
-            text2, words2 = parse_tsv(tsv2, dpi)
+            text2, words2 = parse_tsv(_run_tsv(tess, png, "jpn_vert", td), dpi)
             if _mean_conf(words2) > best[3]:
                 best = ("jpn_vert", text2, words2, _mean_conf(words2))
         return {"text": best[1], "words": best[2], "engine": "tesseract", "lang": best[0]}
@@ -155,3 +188,4 @@ def ocr_page(pdf_path: str, page_no: int, lang: str = "auto", dpi: int = 300) ->
             os.remove(png)
         except OSError:
             pass
+
