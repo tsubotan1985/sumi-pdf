@@ -48,6 +48,11 @@
   <label>保存</label>
   <input type="text" id="savepath" placeholder="空欄なら上書き保存">
   <button onclick="doSave()">保存</button>
+  <label>ページ操作</label>
+  <button onclick="doRotate(90)">↻ 90°回転</button>
+  <button onclick="doPagesDelete()">現在ページを削除</button>
+  <button onclick="doInsert()">PDFを追加…</button>
+  <button onclick="doSplit()">全ページ分割保存</button>
   <label>フォントフォールバック（開いている文書）</label>
   <div id="fontlist">-</div>
   <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。<br>ファイルはロックしない。他アプリが上書き保存すると自動で再読込（未保存編集がある場合は警告）。</div>
@@ -160,6 +165,25 @@ async function doSave(){
     body:JSON.stringify({path:document.getElementById('savepath').value||null})});
   const j=await r.json(); msg(r.ok?('保存: '+j.saved):'ERR '+await r.text());
   if(r.ok && j.stat){ lastStat=j.stat; dirtyNotified=false; }
+}
+async function doRotate(d){
+  const r=await fetch('/api/pages/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno,deg:d})});
+  msg(r.ok?`p${pno+1}を${d}°回転`:'ERR '+await r.text()); render();
+}
+async function doPagesDelete(){
+  if(!confirm(`p${pno+1}を削除しますか？`))return;
+  const r=await fetch('/api/pages/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pnos:[pno]})});
+  const j=await r.json(); msg(r.ok?`削除、全${j.pages}ページ`:'ERR '+await r.text());
+  pno=Math.min(pno, j.pages-1); render();
+}
+async function doInsert(){
+  const p=prompt('追加するPDFのパス'); if(!p)return;
+  const r=await fetch('/api/insert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,at:null})});
+  const j=await r.json(); msg(r.ok?`追加、全${j.pages}ページ`:'ERR '+await r.text()); render();
+}
+async function doSplit(){
+  const r=await fetch('/api/split',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const j=await r.json(); msg(r.ok?('分割: '+j.files.length+'ファイル'):'ERR '+await r.text());
 }
 </script>
 </body>

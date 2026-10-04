@@ -1,6 +1,5 @@
 import os
 
-import pymupdf as fitz
 import pytest
 
 from sumi_pdf import fonts as F
@@ -33,7 +32,10 @@ def test_no_engine_raises_clean(tmp_path):
     if ENG["tesseract"]:
         pytest.skip("tesseract installed; error path not reachable")
     p = str(tmp_path / "x.pdf")
-    d = fitz.open(); d.new_page(); d.save(p); d.close()
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(p)
+    c.showPage()
+    c.save()
     with pytest.raises(RuntimeError, match="no OCR engine"):
         ocr_page(p, 0)
 
@@ -41,7 +43,6 @@ def test_no_engine_raises_clean(tmp_path):
 @pytest.mark.skipif(not ENG["tesseract"], reason="tesseract not installed")
 def test_ocr_live_and_searchable_layer(tmp_path):
     from PIL import Image, ImageDraw, ImageFont
-    from reportlab.lib.utils import ImageReader
 
     ttf = F.default_font("gothic")
     im = Image.new("RGB", (1200, 400), "white")
@@ -51,12 +52,12 @@ def test_ocr_live_and_searchable_layer(tmp_path):
     dr.text((60, 220), "TEL 070-1316-8712", font=f44, fill="black")
     png = str(tmp_path / "scan.png")
     im.save(png)
-    doc = fitz.open()
-    pg = doc.new_page(width=595, height=400)
-    pg.insert_image(fitz.Rect(0, 0, 595, 400), filename=png)
+    from reportlab.pdfgen import canvas
     p = str(tmp_path / "scan.pdf")
-    doc.save(p)
-    doc.close()
+    c = canvas.Canvas(p, pagesize=(1200, 400))  # same aspect as the PNG
+    c.drawImage(png, 0, 0, width=1200, height=400)
+    c.showPage()
+    c.save()
 
     from sumi_pdf.ocr import ocr_page
     r = ocr_page(p, 0, lang="auto")
@@ -66,14 +67,10 @@ def test_ocr_live_and_searchable_layer(tmp_path):
     assert ("見積" in joined or "TEL" in joined or "070" in joined), r["text"]
 
     # invisible layer -> searchable
-    doc = fitz.open(p)
-    n = textlayer.add_layer_doc(doc, 0, r["words"])
-    assert n > 0
-    out = str(tmp_path / "layer.pdf")
-    doc.save(out, garbage=4, deflate=True)
-    doc.close()
-    d2 = fitz.open(out)
-    txt = d2[0].get_text().replace("\xa0", " ")
+    data = open(p, "rb").read()
+    out = textlayer.add_layer_doc(data, 0, r["words"])
+    assert out != data
+    import io
+    from sumi_pdf import pdfio as P
+    txt = P.extract_text(out, 0).replace("\xa0", " ")
     assert len(txt) > 10 and ("070" in txt or "TEL" in txt or "見積" in txt), txt
-    # invisible: render pixel check not needed; render_mode 3 by construction
-    d2.close()

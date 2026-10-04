@@ -1,36 +1,46 @@
-"""Invisible OCR text layer -> searchable PDF (render_mode 3)."""
+"""Invisible OCR text layer -> searchable PDF (reportlab render_mode 3, MIT stack)."""
 from __future__ import annotations
 
-import pymupdf as fitz
+import io
 
-from . import fonts as F
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+from . import edit as E
+
+_FONT = "SumiGothic"
 
 
-def add_searchable_layer(page: fitz.Page, words: list[dict],
-                         fontfile: str | None = None) -> int:
-    """Insert invisible (render_mode=3) OCR words with PDF-pt bboxes.
+def _ensure():
+    if _FONT not in pdfmetrics.getRegisteredFontNames():
+        from . import fonts as F
+        pdfmetrics.registerFont(TTFont(_FONT, F.bundled_path("ipaexg.ttf")))
 
-    words: [{"text": str, "bbox": [x0,y0,x1,y1]}, ...]  (from ocr.parse_tsv)
-    Returns count inserted. Text stays extractable/searchable, invisible on render.
-    """
-    ff = fontfile or F.default_font("gothic")
-    cnt = 0
+
+def add_layer_doc(data: bytes, pno: int, words: list[dict]) -> bytes:
+    """words: tesseract TSV style {bbox:[l,t,r,b]} (top-down pt) or {x,y,h} (baseline
+    y-up). Returns new bytes with an invisible text layer on page pno."""
+    if not words:
+        return data
+    from . import pdfio as P
+    pw, ph = P.page_size(data, pno)
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=(pw, ph))
+    _ensure()
+    t = c.beginText()
+    t.setTextRenderMode(3)
     for w in words:
-        r = fitz.Rect(w["bbox"])
-        if r.is_empty or r.width <= 0 or r.height <= 0:
-            continue
-        if not page.rect.contains(fitz.Point(r.x0, r.y0)):
-            continue
-        size = max(4.0, min(r.height, 72.0))
-        try:
-            page.insert_text(fitz.Point(r.x0, r.y1), w["text"], fontsize=size,
-                             fontname="SumiOCR", fontfile=ff, render_mode=3)
-            cnt += 1
-        except Exception:
-            continue
-    return cnt
-
-
-def add_layer_doc(doc: fitz.Document, page_no: int, words: list[dict],
-                  fontfile: str | None = None) -> int:
-    return add_searchable_layer(doc[page_no], words, fontfile)
+        if "bbox" in w:
+            l, tt, r, b = w["bbox"]
+            h = max(4.0, b - tt)
+            x, y = l, ph - (tt + 0.82 * h)  # approx baseline
+        else:
+            x, y = float(w["x"]), float(w["y"])
+            h = max(4.0, min(float(w.get("h", 8.0)), 72.0))
+        t.setFont(_FONT, h)
+        t.setTextOrigin(x, y)
+        t.textOut(w["text"])
+    c.drawText(t)
+    c.save()
+    return E.merge_overlay(data, pno, buf.getvalue())

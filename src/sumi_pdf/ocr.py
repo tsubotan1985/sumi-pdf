@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-import pymupdf as fitz
+from . import pdfio as _P
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _WIN_TESS_PATHS = [
@@ -78,11 +78,12 @@ def detect_engines() -> dict:
     return out
 
 
-def _render_png(doc, page_no: int, dpi: int = 300) -> str:
-    pm = doc[page_no].get_pixmap(dpi=dpi)
+def _render_png_doc(data: bytes, page_no: int, dpi: int = 300) -> str:
+    png = _P.render_png(data, page_no, dpi)
     fd, path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
-    pm.save(path)
+    with open(path, "wb") as fh:
+        fh.write(png)
     return path
 
 
@@ -155,11 +156,9 @@ def _mean_conf(words) -> float:
 
 def ocr_page(pdf_path: str, page_no: int, lang: str = "auto", dpi: int = 300) -> dict:
     eng = detect_engines()
-    doc = fitz.open(pdf_path)
-    try:
-        png = _render_png(doc, page_no, dpi)
-    finally:
-        doc.close()
+    with open(pdf_path, "rb") as fh:
+        data = fh.read()
+    png = _render_png_doc(data, page_no, dpi)
     try:
         if lang == "ndl":
             src = eng["ndlocr_src"]

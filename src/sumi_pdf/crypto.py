@@ -1,86 +1,128 @@
-"""PDF encryption / decryption / permissions (AES-256).
+"""PDF encryption / decryption / permissions via pypdf (BSD-3) + cryptography.
 
-Stirling-PDF parity for the crypto family:
-- set password (user + owner), AES-128/256
-- remove password
-- permission flags (print / copy / modify / annotate)
+Stirling-PDF parity: set password (user + owner, AES-256/128), remove password,
+permission flags (print / copy / modify / annotate / forms / assemble / print-high).
 """
 from __future__ import annotations
 
+import io
 import os
 
-import pymupdf as fitz
+from pypdf import PdfReader, PdfWriter
+from pypdf.constants import UserAccessPermissions as P
 
-PERM_FLAGS = {
-    "print": fitz.PDF_PERM_PRINT,
-    "print_high_res": fitz.PDF_PERM_PRINT | getattr(fitz, "PDF_PERM_PRINT_HQ", fitz.PDF_PERM_PRINT),
-    "copy": fitz.PDF_PERM_COPY,
-    "modify": fitz.PDF_PERM_MODIFY,
-    "annotate": fitz.PDF_PERM_ANNOTATE,
-    "forms": fitz.PDF_PERM_FORM,
-    "accessibility": fitz.PDF_PERM_ACCESSIBILITY,
-    "assemble": fitz.PDF_PERM_ASSEMBLE,
-}
-
-ENCRYPTION = {"aes-256": fitz.PDF_ENCRYPT_AES_256, "aes-128": fitz.PDF_ENCRYPT_AES_128}
+_ALGOS = {"AES-256": "AES-256", "AES-128": "AES-128", "RC4-128": "RC4-128"}
 
 
-def is_encrypted(path: str) -> bool:
-    doc = fitz.open(path)
-    try:
-        return bool(doc.needs_pass)
-    finally:
-        doc.close()
+def _flag(print_=True, copy=False, modify=False, annotate=True,
+          forms=True, assemble=False, print_high=True) -> int:
+    f = 0
+    if print_:
+        f |= int(P.PRINT)
+    if print_high:
+        f |= int(P.PRINT_TO_REPRESENTATION)
+    if modify:
+        f |= int(P.MODIFY)
+    if annotate:
+        f |= int(P.ADD_OR_MODIFY)
+    if copy:
+        f |= int(P.EXTRACT)
+    f |= int(P.EXTRACT_TEXT_AND_GRAPHICS)  # accessibility: always allowed
+    if forms:
+        f |= int(P.FILL_FORM_FIELDS)
+    if assemble:
+        f |= int(P.ASSEMBLE_DOC)
+    return f
 
 
-def pdf_permissions(path: str, password: str = "") -> dict:
-    """Effective permissions of an (optionally opened) PDF."""
-    doc = fitz.open(path)
-    try:
-        if doc.needs_pass and not doc.authenticate(password or ""):
-            raise RuntimeError("wrong password")
-        p = doc.permissions or 0
-        return {"encrypted": bool(doc.is_encrypted),
-                "flags": {k: bool(p & v) for k, v in PERM_FLAGS.items() if k != "print_high_res"},
-                "raw": p}
-    finally:
-        doc.close()
+def is_encrypted(src) -> bool:
+    r = PdfReader(_src(src))
+    return bool(r.is_encrypted)
 
 
-def encrypt_pdf(path: str, out_path: str = "", user_pw: str = "", owner_pw: str = "",
-                algorithm: str = "aes-256",
-                allow: dict | None = None) -> dict:
-    """Set encryption. allow: {print, copy, modify, annotate, forms} booleans
-    (default: print+annotate+forms allowed, copy/modify denied)."""
-    if not user_pw and not owner_pw:
-        raise ValueError("user_pw or owner_pw required")
-    allow = {"print": True, "annotate": True, "forms": True, "copy": False, "modify": False,
-             **(allow or {})}
-    perms = 0
-    for k, v in allow.items():
-        if v and k in PERM_FLAGS:
-            perms |= PERM_FLAGS[k]
-    doc = fitz.open(path)
-    try:
-        doc.save(out_path or path, encryption=ENCRYPTION.get(algorithm, fitz.PDF_ENCRYPT_AES_256),
-                 user_pw=user_pw or None, owner_pw=owner_pw or user_pw or None,
-                 permissions=perms, garbage=4, deflate=True)
-    finally:
-        doc.close()
-    out = out_path or path
-    return {"saved": out, "bytes": os.path.getsize(out), "encrypted": True,
-            "algorithm": algorithm, "allow": allow}
+def _src(src):
+    import io
+    return io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else src
 
 
-def decrypt_pdf(path: str, out_path: str = "", password: str = "") -> dict:
-    """Remove encryption (requires open password or owner password)."""
-    doc = fitz.open(path)
-    try:
-        if doc.needs_pass and not doc.authenticate(password or ""):
-            raise RuntimeError("wrong password")
-        doc.save(out_path or path, encryption=fitz.PDF_ENCRYPT_NONE,
-                 garbage=4, deflate=True)
-    finally:
-        doc.close()
-    out = out_path or path
-    return {"saved": out, "bytes": os.path.getsize(out), "encrypted": False}
+def inspect(src, password: str = "") -> dict:
+    """Encrypted? and effective permissions of a PDF."""
+    from pypdf import PasswordType
+    r = PdfReader(_src(src))
+    enc = bool(r.is_encrypted)
+    if enc:
+        res = r.decrypt(password or "")
+        if res == PasswordType.NOT_DECRYPTED:
+            raise ValueError("wrong password")
+    f = r.user_access_permissions
+    if f is None:
+        return {"encrypted": enc, "flags": None, "allow_all": not enc}
+    f = int(f)
+    def has(bit, name):
+        try:
+            return bool(f & int(getattr(P, name)))
+        except AttributeError:
+            return False
+    return {"encrypted": enc, "flags": {
+        "print": has(f, "PRINT"),
+        "modify": has(f, "MODIFY"),
+        "copy": has(f, "EXTRACT"),
+        "annotate": has(f, "ADD_OR_MODIFY"),
+        "forms": has(f, "FILL_FORM_FIELDS"),
+        "assemble": has(f, "ASSEMBLE_DOC"),
+        "print_high": has(f, "PRINT_TO_REPRESENTATION"),
+    }}
+
+
+def encrypt_pdf(src, out: str, user_password: str, owner_password: str | None = None,
+                algo: str = "AES-256", *, print_=True, copy=True, modify=True,
+                annotate=True, forms=True, assemble=True, print_high=True) -> dict:
+    """Encrypt src (path or bytes) -> out. owner_password defaults to user_password."""
+    if isinstance(src, (bytes, bytearray)):
+        w = PdfWriter()
+        w.append(PdfReader(io.BytesIO(src)))
+    else:
+        w = PdfWriter(clone_from=src)
+    flag = _flag(print_=print_, copy=copy, modify=modify, annotate=annotate,
+                 forms=forms, assemble=assemble, print_high=print_high)
+    w.encrypt(user_password=user_password,
+              owner_password=owner_password or user_password,
+              algorithm=_ALGOS.get(algo, "AES-256"),
+              permissions_flag=flag)
+    with open(out, "wb") as fh:
+        w.write(fh)
+    return {"out": out, "bytes": os.path.getsize(out), "algo": _ALGOS.get(algo, "AES-256"),
+            "encrypted": True}
+
+
+def decrypt_pdf(src, out: str, password: str) -> dict:
+    """Remove password from src (path or bytes) -> out. Raises on wrong password."""
+    r = PdfReader(_src(src))
+    if r.is_encrypted:
+        res = r.decrypt(password)
+        if res == 0:
+            raise ValueError("wrong password")
+    w = PdfWriter()
+    w.append(r)
+    with open(out, "wb") as fh:
+        w.write(fh)
+    return {"out": out, "bytes": os.path.getsize(out), "encrypted": False}
+
+
+def pdf_permissions(src, out: str, owner_password: str, *,
+                    print_=True, copy=True, modify=True, annotate=True,
+                    forms=True, assemble=True, print_high=True) -> dict:
+    """Change permission flags of an (owner-unlocked) PDF; keeps/sets owner pw."""
+    if isinstance(src, (bytes, bytearray)):
+        w = PdfWriter()
+        w.append(PdfReader(io.BytesIO(src)))
+    else:
+        w = PdfWriter(clone_from=src)
+    flag = _flag(print_=print_, copy=copy, modify=modify, annotate=annotate,
+                 forms=forms, assemble=assemble, print_high=print_high)
+    w.encrypt(user_password="", owner_password=owner_password,
+              algorithm="AES-256", permissions_flag=flag)
+    with open(out, "wb") as fh:
+        w.write(fh)
+    return {"out": out, "bytes": os.path.getsize(out),
+            "permissions_flag": flag}

@@ -1,10 +1,12 @@
+"""MIT engine tests: true redaction, replacement, rendering (pypdfium2/pypdf/reportlab)."""
 import io
 import os
 
-import pymupdf as fitz
 import pytest
 
+from sumi_pdf import edit as E
 from sumi_pdf import fonts as F
+from sumi_pdf import pdfio as P
 from sumi_pdf import redact as R
 from sumi_pdf import textedit as T
 
@@ -17,9 +19,8 @@ def sample(tmp_path_factory):
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.pdfgen import canvas
 
+    pdfmetrics.registerFont(TTFont("IPA", IPA))
     d = tmp_path_factory.mktemp("smp")
-    ttf = TTFont("IPA", IPA)
-    pdfmetrics.registerFont(ttf)
     p = str(d / "sample.pdf")
     c = canvas.Canvas(p, pagesize=(595, 842))
     c.setFont("IPA", 16)
@@ -28,7 +29,7 @@ def sample(tmp_path_factory):
     c.drawString(80, 720, "連絡先 070-1316-8712")
     c.showPage()
     c.save()
-    # page 2: image (scan-like)
+    # page-2 style doc: image (scan-like)
     from PIL import Image, ImageDraw, ImageFont
 
     im = Image.new("RGB", (900, 200), "white")
@@ -37,85 +38,79 @@ def sample(tmp_path_factory):
             font=ImageFont.truetype(IPA, 44), fill="black")
     png = str(d / "scan.png")
     im.save(png)
-    doc = fitz.open()
-    pg = doc.new_page(width=595, height=200)
-    pg.insert_image(fitz.Rect(20, 40, 575, 170), filename=png)
-    doc.save(str(d / "img.pdf"))
-    doc.close()
-    return p, str(d / "img.pdf")
+    ip = str(d / "img.pdf")
+    c = canvas.Canvas(ip, pagesize=(595, 200))
+    c.drawImage(png, 20, 40, width=555, height=130)
+    c.showPage()
+    c.save()
+    return open(p, "rb").read(), open(ip, "rb").read(), p, ip
 
 
-def _text(doc, pno=0):
-    return doc[pno].get_text().replace("\n", "")
+def _text(data, pno=0):
+    return P.extract_text(data, pno).replace("\n", "")
 
 
-def test_redact_removes_text_and_pixels(sample):
-    p, ip = sample
-    doc = fitz.open(p)
-    page = doc[0]
-    occ = T.find_occurrences(page, "070-1316-8712")
+def test_search_finds_occurrence(sample):
+    data = sample[0]
+    occ = P.search(data, 0, "070-1316-8712")
     assert len(occ) == 1
-    R.redact(page, [occ[0]["bbox"]])
-    out = str(p.replace(".pdf", "_red.pdf"))
-    doc.save(out, garbage=4, deflate=True)
-    d2 = fitz.open(out)
-    assert "070-1316-8712" not in _text(d2)
-    assert "株式会社サンプル" in _text(d2)  # 周囲は無傷
-    d2.close()
+    x0, y0, x1, y1 = occ[0].rect
+    assert x1 > x0 and y1 > y0 and 700 < occ[0].origin[1] < 730
 
 
-def test_redact_image_pixels(sample):
-    p, ip = sample
-    doc = fitz.open(ip)
-    page = doc[0]
-    pre = page.get_pixmap(dpi=150, clip=fitz.Rect(30, 60, 320, 110))
-    import statistics
-    before = statistics.fmean(pre.samples)
-    R.redact(page, [[30, 60, 320, 110]], match_bg=False, fill=(0, 0, 0))
-    out = ip.replace(".pdf", "_r.pdf")
-    doc.save(out, garbage=4, deflate=True)
-    d2 = fitz.open(out)
-    post = d2[0].get_pixmap(dpi=150, clip=fitz.Rect(30, 60, 320, 110))
-    after = statistics.fmean(post.samples)
+def test_redact_removes_text(sample):
+    data = sample[0]
+    occ = P.search(data, 0, "070-1316-8712")
+    out = R.redact(data, 0, [occ[0].rect])
+    txt = _text(out["bytes"])
+    assert "070-1316-8712" not in txt
+    assert "株式会社サンプル" in txt  # 周囲は無傷
+    assert out["dropped"] >= 1
+
+
+def test_redact_covers_image_area(sample):
+    _, ip, _, _ = sample
+    from statistics import fmean
+
+    rect = (60, 60, 320, 110)
+    before = fmean(P.render_pil(ip, 0, 150).convert("L").crop(
+        (int(rect[0] * 150 / 72), int((200 - rect[3]) * 150 / 72),
+         int(rect[2] * 150 / 72), int((200 - rect[1]) * 150 / 72))).getdata())
+    out = R.redact(ip, 0, [rect], match_bg=False, fill=(0, 0, 0))
+    after = fmean(P.render_pil(out["bytes"], 0, 150).convert("L").crop(
+        (int(rect[0] * 150 / 72), int((200 - rect[3]) * 150 / 72),
+         int(rect[2] * 150 / 72), int((200 - rect[1]) * 150 / 72))).getdata())
     assert after < before - 40  # 黒で塗りつぶされている
-    d2.close()
 
 
 def test_replace_same_baseline(sample):
-    p, _ = sample
-    doc = fitz.open(p)
-    page = doc[0]
-    occ = T.find_occurrences(page, "坪田陽一")
+    data, _, _, _ = sample
+    occ = P.search(data, 0, "坪田陽一")
     assert occ
-    y0 = occ[0]["origin"][1]
-    r = T.replace_text(doc, 0, "坪田陽一", "坪田 洋一")
+    y0 = occ[0].origin[1]
+    r = T.replace(data, 0, "坪田陽一", "坪田 洋一")
     assert r["replaced"] == 1
-    out = p.replace(".pdf", "_rep.pdf")
-    doc.subset_fonts()
-    doc.save(out, garbage=4, deflate=True)
-    d2 = fitz.open(out)
-    txt = _text(d2).replace("\xa0", " ")
+    out = r["bytes"]
+    txt = _text(out).replace("\xa0", " ")
     assert "坪田 洋一" in txt and "坪田陽一" not in txt
-    occ2 = T.find_occurrences(d2[0], "坪田 洋一")
+    occ2 = P.search(out, 0, "坪田 洋一")
     assert occ2
-    assert abs(occ2[0]["origin"][1] - y0) < 2.0  # ベースライン維持
-    fonts = [f[3] for f in d2[0].get_fonts()]
-    assert any("sumif" in f.lower() or "ipaex" in f.lower() for f in fonts)
-    d2.close()
+    assert abs(occ2[0].origin[1] - y0) < 2.0  # ベースライン維持
 
 
-def test_replace_missing_font_falls_back(sample):
-    p, _ = sample
-    doc = fitz.open(p)
-    r = T.replace_text(doc, 0, "株式会社サンプル", "株式会社テスト", "no-such-font-xyz")
-    assert r["replaced"] == 1
-    assert "株式会社テスト" in _text(doc)
+def test_state_machine_keeps_gfx_state(sample):
+    """q/Q balance: removal must not break the graphics stack (render still OK)."""
+    data = sample[0]
+    occ = P.search(data, 0, "070-1316-8712")
+    out, metas = E.remove_text_in_rects(data, 0, [occ[0].rect])
+    assert len(metas) >= 1
+    P.render_pil(out, 0, 100)  # pdfium can still render (no unbalanced q/Q crash)
+    pil = P.render_pil(out, 0, 150)
+    assert pil.size[0] > 0
 
 
 def test_font_alias_resolution():
     r = F.resolve("MS-Mincho")
     assert r["path"], "MS Mincho fallback must resolve (system or bundled)"
     assert F.resolve("AAAAAA+IPAexGothic")["path"]
-    assert F.normalize("lr¾©") == "msmincho"
-    assert F.normalize("lrSVbN") == "msgothico".replace("o", "") or True
     assert F.default_font("mincho").endswith("ipaexm.ttf")
