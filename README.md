@@ -72,10 +72,15 @@ hermes mcp add sumi-pdf -- python -m sumi_pdf.mcp_server
 ```
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -e .[app,build,test]
-.venv\Scripts\python run_app.py          # WebView2ウィンドウ
+.venv\Scripts\python run_app.py      # WebView2ウィンドウ
+```
 
-# テスト（WSLでも可）
-PYTHONPATH=src python3 -m pytest tests -q
+PyInstallerでビルドする場合（pymupdfは含めない — MIT構成）:
+
+```
+.venv\Scripts\python -m PyInstaller --noconfirm --windowed --name SUMIPDF --icon resources\icon.ico ^
+  --add-data "fonts;fonts" --add-data "web;web" --add-data "tools\tessdata;tools\tessdata" ^
+  --collect-all uvicorn --collect-all webview run_app.py
 ```
 
 ## 同梱物とライセンス

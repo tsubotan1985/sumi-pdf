@@ -18,13 +18,17 @@ OCR engines
 - NDLOCR-Lite   National Diet Library, Japan — CC-BY-4.0
                 https://github.com/ndl-lab/ndlocr-lite (bundled at third_party/ndlocr-lite)
 - tesseract     Apache-2.0 — https://github.com/tesseract-ocr/tesseract
-- tessdata_fast Apache-2.0 — https://github.com/tesseract-ocr/tessdata_fast (tools/tessdata/)
+- tessdata_fast Apache-2.0 — https://github.com/tesseract-ocr/tessdata_fast
+                license copy: tools/tessdata/LICENSE
 
 Fonts (fonts/, see fonts/LICENSES.md for the full list)
 -------------------------------------------------------
 - IPAex Gothic / IPAex Mincho   IPA Font License v1.0
+                license copy: fonts/IPA_Font_License_Agreement_v1.0.txt
+                (extracted verbatim from the official IPAexfont00401.zip)
 - Noto Sans CJK JP              SIL Open Font License 1.1
-- Liberation Sans / Serif       SIL Open Font License 1.1
+- Liberation Sans / Serif (v2.1.5, OFL) SIL Open Font License 1.1
+                license copy + per-font copyright lines: fonts/OFL.txt
 
 Model files (bundled with NDLOCR-Lite)
 --------------------------------------

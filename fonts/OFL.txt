@@ -1,0 +1,108 @@
+# SIL Open Font License 1.1 — full text + per-font copyright notices
+
+This package bundles the following fonts under the SIL Open Font License, Version 1.1.
+The full license text follows below (also available at https://openfontlicense.org/).
+
+## Noto Sans CJK JP (NotoSansCJKjp-Regular.otf)
+
+Copyright line (from the font name table):
+
+    © 2014-2021 Adobe (http://www.adobe.com/).
+
+Source: https://github.com/notofonts/noto-cjk
+License: SIL Open Font License 1.1
+
+## Liberation Sans / Liberation Serif (LiberationSans-Regular.ttf, LiberationSerif-Regular.ttf, LiberationSerif-Bold.ttf)
+
+Copyright line (from the font name table):
+
+    Digitized data copyright (c) 2010 Google Corporation.
+    Copyright (c) 2012 Red Hat, Inc.
+
+Source: https://github.com/liberationfonts/liberation-fonts
+License: SIL Open Font License 1.1 (v2.1.5 of the fonts)
+
+---
+
+# SIL OPEN FONT LICENSE Version 1.1 - February 2007
+
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software, provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+## DEFINITIONS
+
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting — in part or in whole — any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+## PERMISSION & CONDITIONS
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1. Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2. Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice(s) and this license notice can be
+found with all copies of the Font Software.
+
+3. Neither the names of the Copyright Holder(s) nor the names of its
+authors may be used to promote or endorse products derived from this
+Software without specific prior written permission. As the originators
+of this Software request that the authorship is clearly acknowledged,
+a mention of the authorship is appreciated but not mandatory.
+
+4. The Font Software is modified in at least one respect: the set of
+Reserved Font Names is updated in accordance with section 3. (Reserved
+Font Names that apply to the Original Version cease to apply to
+Modified Versions.)
+
+5. The Font Software, in Original or Modified Versions, may not be
+sold by itself for the purpose of making money off the Font Software
+itself.
+
+6. THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+---
+
+Note: the canonical, authoritative text of the license is published at
+https://openfontlicense.org/ — in case of discrepancy that text governs.
+The bundled font files retain their embedded license metadata.
