@@ -365,3 +365,7 @@ select {
   #pagesPanel { width: 128px; }
   #settingsPanel { width: 260px; }
 }
+
+/* AI summarize (Task 10): reuses .field/.row/.result/.note tones */
+#aiOut { white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.ai-notice { color: var(--warn); border-left: 3px solid var(--warn); padding-left: 8px; }

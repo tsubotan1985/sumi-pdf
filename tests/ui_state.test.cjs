@@ -133,3 +133,68 @@ test('redactFill converts UI colors to float RGB (text) and int RGB (image)', ()
   assert.deepEqual(app.redactFill('white').image, [255, 255, 255]);
   assert.equal(app.redactFill('background').matchBg, true); // let the engine sample the page bg
 });
+
+/* ---------- Task 1: selection kept in PDF pt (zoom-invariant) ---------- */
+
+const approxRect = (a, b, eps = 1e-6, msg = '') => {
+  assert.ok(
+    Array.isArray(a) && a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= eps),
+    (msg || 'rects equal') + ': ' + JSON.stringify(a) + ' ~= ' + JSON.stringify(b),
+  );
+};
+
+test('pdfRectToView is the exact inverse of viewRectToPdf (round trip)', () => {
+  const cases = [
+    { rect: [10, 20, 110, 60], scale: 1.5, pageH: 400 },
+    { rect: [0, 0, 297.5, 421], scale: 0.5, pageH: 842 }, // full page exactly (297.5×421 px at 50%)
+    { rect: [300, 700, 40, 100], scale: 2, pageH: 842 }, // unnormalized input order
+  ];
+  for (const c of cases) {
+    const pdf = app.viewRectToPdf(c).rect;
+    const view = app.pdfRectToView({ rect: pdf, scale: c.scale, pageH: c.pageH }).rect;
+    const pdf2 = app.viewRectToPdf({ rect: view, scale: c.scale, pageH: c.pageH }).rect;
+    approxRect(pdf2, pdf, 1e-6, 'pdf -> view -> pdf round trip');
+    assert.ok(view[0] <= view[2] && view[1] <= view[3], 'view rect normalized, y-down');
+    // pdf rect is y-up inside the page
+    assert.ok(pdf[1] <= pdf[3] && pdf[3] <= c.pageH + 1e-9 && pdf[1] >= -1e-9);
+  }
+});
+
+test('pdf-pt selection is invariant across scale changes (bug A regression)', () => {
+  // pointerup at 85%: the same on-screen rect must keep targeting the same
+  // characters after zooming to 106% — the pdf-pt rect must not move.
+  const pageH = 842;
+  const viewAt85 = [100, 200, 300, 220];
+  const sel = app.viewRectToPdf({ rect: viewAt85, scale: 0.85, pageH: pageH }).rect;
+  for (const z of [0.54, 1.06, 2.0]) {
+    const view = app.pdfRectToView({ rect: sel, scale: z, pageH: pageH }).rect;
+    const target = app.viewRectToPdf({ rect: view, scale: z, pageH: pageH }).rect;
+    approxRect(target, sel, 1e-6, 'sel targets the same pdf region at zoom ' + z);
+  }
+  // the view-space rect itself DOES move with zoom (tracks the same glyphs)
+  const viewAt106 = app.pdfRectToView({ rect: sel, scale: 1.06, pageH: pageH }).rect;
+  assert.ok(Math.abs(viewAt106[2] - viewAt106[0] - (viewAt85[2] - viewAt85[0]) * 1.06 / 0.85) < 1e-6);
+});
+
+test('pdfRectToView refuses an unusable scale like viewRectToPdf', () => {
+  assert.equal(app.pdfRectToView({ rect: [0, 0, 1, 1], scale: 0, pageH: 100 }).ok, false);
+  assert.equal(app.pdfRectToView({ rect: [0, 0, 1, 1], scale: -2, pageH: 100 }).rect, null);
+});
+
+/* ---------- Task 2: one pinned page for the whole redact pipeline ---------- */
+
+test('redactCallSpecs pins a single page across every API call (bug B regression)', () => {
+  const fill = app.redactFill('white');
+  const calls = app.redactCallSpecs(0, [1, 2, 3, 4], 'text_image', fill);
+  assert.deepEqual(calls.map((c) => c.path), ['/api/redact', '/api/img-redact']);
+  assert.deepEqual(calls.map((c) => c.body.page), [0, 0]); // both APIs hit page 0
+  assert.deepEqual(calls[0].body.rects, [[1, 2, 3, 4]]);
+  assert.deepEqual(calls[0].body.fill, fill.redact);
+  assert.equal(calls[0].body.match_bg, fill.matchBg);
+  assert.deepEqual(calls[1].body.fill, fill.image);
+  // single-op pipelines keep exactly one call, on the same pinned page
+  assert.deepEqual(app.redactCallSpecs(3, [0, 0, 5, 5], 'text', fill).map((c) => [c.path, c.body.page]),
+    [['/api/redact', 3]]);
+  assert.deepEqual(app.redactCallSpecs(7, [0, 0, 5, 5], 'image', fill).map((c) => [c.path, c.body.page]),
+    [['/api/img-redact', 7]]);
+});

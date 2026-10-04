@@ -56,6 +56,17 @@ function viewRectToPdf(o) {
   return { ok: true, rect: [x0, H - vy1, x1, H - vy0] };
 }
 
+function pdfRectToView(o) {
+  const scale = +o.scale;
+  if (!(scale > 0)) return { ok: false, rect: null };
+  const r = o.rect;
+  const x0 = Math.min(r[0], r[2]) * scale;
+  const x1 = Math.max(r[0], r[2]) * scale;
+  const H = +o.pageH || 0;
+  // inverse flip: view_y = (pageH - pdf_y) * scale, y-down and normalized.
+  return { ok: true, rect: [x0, (H - Math.max(r[1], r[3])) * scale, x1, (H - Math.min(r[1], r[3])) * scale] };
+}
+
 function rectTooSmall(r, min) {
   if (!r) return true;
   return Math.abs(r[2] - r[0]) < min || Math.abs(r[3] - r[1]) < min;
@@ -127,11 +138,25 @@ function redactFill(kind) {
   return { redact: [1, 1, 1], image: [255, 255, 255], matchBg: false }; // white
 }
 
+// Every API call of one redact run is built here from ONE pinned page number,
+// so a page switch mid-pipeline can never send the calls to different pages.
+function redactCallSpecs(pno, rect, target, fill) {
+  const ops = redactPipeline(target);
+  const calls = [];
+  if (ops.indexOf('redact') >= 0) {
+    calls.push({ kind: 'redact', path: '/api/redact', body: { page: pno, rects: [rect], match_bg: fill.matchBg, fill: fill.redact } });
+  }
+  if (ops.indexOf('img-redact') >= 0) {
+    calls.push({ kind: 'image', path: '/api/img-redact', body: { page: pno, rects: [rect], fill: fill.image } });
+  }
+  return calls;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    clampPage, clampDpi, computeScale, fmtZoom, viewRectToPdf, rectTooSmall,
+    clampPage, clampDpi, computeScale, fmtZoom, viewRectToPdf, pdfRectToView, rectTooSmall,
     basename, sanitizeFilename, allowedKeys, canDeletePage, formatApiError,
-    nextDpiForScale, ocrLayerSummary, replaceSummary, redactPipeline, redactFill,
+    nextDpiForScale, ocrLayerSummary, replaceSummary, redactPipeline, redactFill, redactCallSpecs,
   };
 }
 
@@ -146,7 +171,7 @@ function boot() {
     dpi: 120, fit: 'page', zoom: 1,
     busy: false, stat: null, lastStat: null, dirtyNotified: false,
     size: [0, 0], fonts: [],
-    sel: null,                       // [x0,y0,x1,y1] in CSS px, page-local
+    sel: null,                       // [x0,y0,x1,y1] in PDF pt (y-up), page-local — zoom-invariant
     rot: {},                         // page -> applied rotation (UI-tracked)
     view: { bmpW: 0, bmpH: 0, ptW: 0, ptH: 0, renderDpi: 120, token: 0 },
     lastSelPage: null,
@@ -290,8 +315,10 @@ function boot() {
   async function saveFlow() {
     if (!state.pages || state.busy) return false;
     const j = await run('保存', () => api('/api/save', { method: 'POST', body: { path: null } }));
-    if (j) { afterSave(j); setMsg('保存しました: ' + basename(j.saved), 'ok'); }
-    return !!j;
+    if (!j) return false;
+    if (j.cancelled) { setMsg('保存をキャンセルしました'); return false; } // upload doc: dialog declined
+    afterSave(j); setMsg('保存しました: ' + basename(j.saved), 'ok');
+    return true;
   }
 
   async function saveAsFlow() {
@@ -412,7 +439,7 @@ function boot() {
   }
 
   function nav(d) {
-    if (!state.pages) return;
+    if (!state.pages || state.busy) return; // busy: a running edit pipeline owns the page
     const next = clampPage(state.pno + d, state.pages);
     if (next === state.pno) return;
     state.pno = next;
@@ -421,7 +448,7 @@ function boot() {
   }
 
   function goPage(p) {
-    if (!state.pages) return;
+    if (!state.pages || state.busy) return; // covers thumbnail clicks too
     const next = clampPage(p, state.pages);
     if (next === state.pno) return;
     state.pno = next;
@@ -462,7 +489,9 @@ function boot() {
   function drawOverlay() {
     octx.clearRect(0, 0, el.overlay.width, el.overlay.height);
     if (!state.sel) return;
-    const [x0, y0, x1, y1] = state.sel;
+    const conv = pdfRectToView({ rect: state.sel, scale: currentScale(), pageH: pagePointSize()[1] });
+    if (!conv.ok) return;
+    const [x0, y0, x1, y1] = conv.rect;
     octx.save();
     octx.strokeStyle = '#c0342b';
     octx.fillStyle = 'rgba(192,52,43,.14)';
@@ -475,47 +504,51 @@ function boot() {
     octx.restore();
   }
   let dragging = null;
+  function setSelFromView(vr) {
+    // store the selection in PDF pt immediately, so zoom/fit/resize can never
+    // detach the frame from the characters it was drawn over
+    const conv = viewRectToPdf({ rect: vr, scale: currentScale(), pageH: pagePointSize()[1] });
+    if (conv.ok) state.sel = conv.rect;
+  }
   function onPointerDown(e) {
     if (!state.pages || e.button !== 0) return;
     try { el.overlay.setPointerCapture(e.pointerId); } catch (err) { /* synthetic/already-released pointer */ }
     const [x, y] = pointerToLocal(e);
-    dragging = { id: e.pointerId, start: [x, y] };
-    state.sel = [x, y, x, y];
+    dragging = { id: e.pointerId, start: [x, y], view: [x, y] };
+    setSelFromView([x, y, x, y]);
     drawOverlay();
   }
   function onPointerMove(e) {
     if (!dragging || e.pointerId !== dragging.id) return;
     const [x, y] = pointerToLocal(e);
-    state.sel = [dragging.start[0], dragging.start[1], x, y];
+    dragging.view = [x, y];
+    setSelFromView([dragging.start[0], dragging.start[1], x, y]);
     drawOverlay();                 // NO /api/page refetch on mousemove
     updateSelHint();
   }
   function onPointerUp(e) {
     if (!dragging || e.pointerId !== dragging.id) return;
     try { el.overlay.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    const viewRect = [dragging.start[0], dragging.start[1], dragging.view[0], dragging.view[1]];
     dragging = null;
-    if (rectTooSmall(state.sel, 4)) { state.sel = null; drawOverlay(); }
+    if (rectTooSmall(viewRect, 4)) { state.sel = null; drawOverlay(); } // min 4 CSS px, as dragged
     state.lastSelPage = state.pno;
     updateSelHint();
   }
 
   function selPt() {
     if (!state.sel) return null;
-    const scale = currentScale();
-    const [ptW, ptH] = pagePointSize();
-    const conv = viewRectToPdf({ rect: state.sel, scale: scale, pageH: ptH });
-    if (!conv.ok) return null;
-    if (rectTooSmall(conv.rect, 2)) return null;
-    return conv.rect;
+    if (rectTooSmall(state.sel, 2)) return null; // min 2 pt on the page
+    return [state.sel[0], state.sel[1], state.sel[2], state.sel[3]];
   }
   function updateSelHint() {
     const el2 = $('#selStatus');
     if (!el2) return;
     const r = state.sel;
-    if (r && !rectTooSmall(r, 4)) {
-      const [w0, h0] = pagePointSize();
-      const scale = currentScale();
-      el2.textContent = '選択中 (' + Math.round(Math.abs(r[2] - r[0]) / scale) + '×' + Math.round(Math.abs(r[3] - r[1]) / scale) + ' pt)';
+    if (r && !rectTooSmall(r, 2)) {
+      // state.sel is already in PDF pt — no scale involved, so the hint and
+      // the frame stay glued to the same glyphs at any zoom
+      el2.textContent = '選択中 (' + Math.round(Math.abs(r[2] - r[0])) + '×' + Math.round(Math.abs(r[3] - r[1])) + ' pt)';
       el2.className = 'selhint has';
     } else {
       el2.textContent = '未選択 — PDF上をドラッグしてください';
@@ -571,31 +604,76 @@ function boot() {
 
   /* ---------- redaction ---------- */
   async function execRedact() {
+    const pno = state.pno; // pin the page ONCE: every call below must hit the same page
     const rect = selPt();
     if (!rect) { setMsg('先にPDF上をドラッグして範囲を選択してください', 'warn'); return; }
-    if ((state.rot[state.pno] || 0) % 360 !== 0) {
+    if ((state.rot[pno] || 0) % 360 !== 0) {
       setMsg('⚠ このページは回転済みのため、見えている位置とずれる恐れがあります。墨消しを中止しました', 'warn');
       return;
     }
     const target = $('#redactTarget').value;
     const fill = redactFill($('#redactFill').value);
-    const ops = redactPipeline(target);
+    const calls = redactCallSpecs(pno, rect, target, fill);
     await run('墨消し', async () => {
       const notes = [];
-      if (ops.indexOf('redact') >= 0) {
-        const j = await api('/api/redact', { method: 'POST', body: { page: state.pno, rects: [rect], match_bg: fill.matchBg, fill: fill.redact } });
-        notes.push('文字 ' + (j.applied ? ('削除' + j.applied.dropped + '・塗り' + j.applied.filled) : 'ok'));
-        state.dirty = true;
-      }
-      if (ops.indexOf('img-redact') >= 0) {
-        const j = await api('/api/img-redact', { method: 'POST', body: { page: state.pno, rects: [rect], fill: fill.image } });
-        notes.push('画像 ' + (j.edited ? j.edited.length : 0) + '枚');
+      for (const c of calls) {
+        const j = await api(c.path, { method: 'POST', body: c.body });
+        if (c.kind === 'redact') {
+          notes.push('文字 ' + (j.applied ? ('削除' + j.applied.dropped + '・塗り' + j.applied.filled) : 'ok'));
+        } else {
+          notes.push('画像 ' + (j.edited ? j.edited.length : 0) + '枚');
+        }
         state.dirty = true;
       }
       updateDirty();
       setMsg('墨消し完了: ' + notes.join(' / '), 'ok');
       clearSelection(false);
       render();
+      return true;
+    });
+  }
+
+  /* ---------- find & bulk redact (検索して墨消し) ---------- */
+  let findHits = [];
+  async function onFindRedact(e) {
+    const apply = e && e.currentTarget && e.currentTarget.id === 'btnFindRedact'; // read sync: currentTarget is gone after await
+    if (apply) {
+      const rects = $$('input[type=checkbox]:checked', $('#findList'))
+        .map((c) => findHits[+c.dataset.idx]).filter(Boolean)
+        .map((m) => ({ page: m.page, x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1 }));
+      if (!rects.length) { setMsg('チェックした候補がありません', 'warn'); return; }
+      await run('一括墨消し', async () => {
+        const j = await api('/api/redact-bulk', { method: 'POST', body: { rects: rects } });
+        const a = j.applied || {};
+        state.dirty = true; updateDirty();
+        setMsg('一括墨消し完了: ' + rects.length + '候補（文字削除 ' + (a.dropped || 0) + '・塗り ' + (a.filled || 0) + '）', 'ok');
+        findHits = []; $('#findList').innerHTML = ''; $('#findOut').textContent = '';
+        render();
+        return true;
+      });
+      return;
+    }
+    const q = $('#findQ').value.trim();
+    if (!q) { setMsg('検索語を入力してください', 'warn'); return; }
+    await run('検索', async () => {
+      const j = await api('/api/find', { method: 'POST', body: { q: q } });
+      findHits = j.matches || [];
+      const list = $('#findList');
+      list.innerHTML = '';
+      findHits.forEach((m, i) => {
+        const lab = document.createElement('label');
+        lab.className = 'check';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = true; cb.dataset.idx = String(i);
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(
+          'p' + (m.page + 1) + ' 「' + (m.context || '') + '」 (' + Math.round(m.x0) + ', ' + Math.round(m.y1) + ') pt'));
+        list.appendChild(lab);
+      });
+      $('#findOut').textContent = findHits.length
+        ? findHits.length + '件見つかりました。消さない候補はチェックを外してください'
+        : '見つかりませんでした';
+      setMsg('検索: ' + findHits.length + '件', findHits.length ? 'ok' : 'warn');
       return true;
     });
   }
@@ -640,12 +718,13 @@ function boot() {
 
   /* ---------- page operations ---------- */
   async function doRotate(deg) {
+    const pno = state.pno; // pin before await: rot recording must match the rotated page
     await run('回転', async () => {
-      await api('/api/pages/rotate', { method: 'POST', body: { page: state.pno, deg: deg } });
-      state.rot[state.pno] = ((state.rot[state.pno] || 0) + deg) % 360;
+      await api('/api/pages/rotate', { method: 'POST', body: { page: pno, deg: deg } });
+      state.rot[pno] = ((state.rot[pno] || 0) + deg) % 360;
       state.dirty = true; updateDirty();
       state.view.ptW = state.view.ptH = 0; // size may change
-      setMsg('p' + (state.pno + 1) + ' を ' + deg + '° 回転しました', 'ok');
+      setMsg('p' + (pno + 1) + ' を ' + deg + '° 回転しました', 'ok');
       render();
       return true;
     });
@@ -765,6 +844,94 @@ function boot() {
     });
   }
 
+  /* ---------- undo / redo ---------- */
+  async function doUndo(redo) {
+    await run(redo ? 'やり直し' : '元に戻す', async () => {
+      const j = await api(redo ? '/api/redo' : '/api/undo', { method: 'POST', body: { page: state.pno } });
+      state.pages = j.pages | 0;
+      state.pno = clampPage(j.page | 0, state.pages);
+      state.dirty = !!j.dirty; updateDirty();
+      state.size = [0, 0]; state.view.ptW = state.view.ptH = 0;
+      clearSelection(false);
+      buildThumbs();
+      setMsg(redo ? 'やり直しました（全 ' + state.pages + ' ページ）' : '元に戻しました（全 ' + state.pages + ' ページ）', 'ok');
+      render();
+      return true;
+    });
+  }
+
+  /* ---------- AI summarize (Task 10): one handler + registrations ---------- */
+  let aiConfigLoaded = false;
+  let aiLastResult = '';
+  async function aiAction(e) {
+    const id = e.currentTarget.id;
+    if (!aiConfigLoaded) {           // prefill once from the saved (masked) config
+      aiConfigLoaded = true;
+      try {
+        const j = await api('/api/ai/config');
+        if (!$('#aiBaseURL').value) $('#aiBaseURL').value = j.base_url || '';
+        if (!$('#aiModel').value) $('#aiModel').value = j.model || '';
+        $('#aiKey').placeholder = j.has_key ? ('保存済み（末尾 ' + j.api_key + '）') : '未設定';
+      } catch (err) { /* config endpoint unavailable: keep the form as-is */ }
+    }
+    if (id === 'btnAISave') {
+      await run('AI設定保存', async () => {
+        const j = await api('/api/ai/config', { method: 'PUT', body: {
+          base_url: $('#aiBaseURL').value.trim(), api_key: $('#aiKey').value,
+          model: $('#aiModel').value.trim(), timeout: 60,
+        } });
+        setMsg('AI設定を保存しました（key ' + (j.api_key || '未設定') + '）', 'ok');
+        return true;
+      });
+      return;
+    }
+    if (id === 'btnAITest') {
+      await run('接続テスト', async () => {
+        const j = await api('/api/ai/summarize', { method: 'POST', body: {
+          scope: 'all', text: 'ping', prompt: '接続テストです。「OK」とだけ返してください。',
+        } });
+        setMsg('接続OK: ' + String(j.summary || '').slice(0, 40), 'ok');
+        return true;
+      });
+      return;
+    }
+    if (id === 'btnAIRun') {
+      const pno = state.pno;           // pin the page before any await (same as redact)
+      const checked = $$('input[name="aiScope"]').filter((r) => r.checked)[0];
+      const body = { scope: (checked && checked.value) || 'all',
+                     prompt: $('#aiPrompt').value.trim() || null, page: pno };
+      if (body.scope === 'range') body.range = $('#aiRange').value.trim();
+      if (body.scope === 'selection') {
+        const rect = selPt();
+        if (!rect) { setMsg('先にPDF上をドラッグして範囲を選択してください', 'warn'); return; }
+        body.rects = [rect];
+      }
+      await run('AI要約', async () => {
+        const j = await api('/api/ai/summarize', { method: 'POST', body: body });
+        aiLastResult = j.summary || '';
+        $('#aiOut').textContent = aiLastResult;
+        setMsg('AI要約完了（' + j.chunks + 'チャンク）', 'ok');
+        return true;
+      });
+      return;
+    }
+    if (id === 'btnAICopy') {
+      if (!aiLastResult) { setMsg('コピーする結果がありません', 'warn'); return; }
+      try { await navigator.clipboard.writeText(aiLastResult); setMsg('結果をコピーしました', 'ok'); }
+      catch (err) {
+        const ta = document.createElement('textarea');
+        ta.value = aiLastResult; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); setMsg('結果をコピーしました', 'ok'); }
+        catch (e2) { setMsg('✗ AI要約: コピーに失敗しました', 'err'); }
+        ta.remove();
+      }
+    }
+  }
+  ['btnAISave', 'btnAITest', 'btnAIRun', 'btnAICopy'].forEach((bid) => {
+    const b = document.getElementById(bid);
+    if (b) b.addEventListener('click', aiAction);
+  });
+
   /* ---------- external update poll (live reload) ---------- */
   async function checkExternalUpdate() {
     if (!state.pages || !$('#autoreload') || !$('#autoreload').checked) return;
@@ -803,6 +970,8 @@ function boot() {
     if (e.key === 'PageDown') { e.preventDefault(); nav(1); }
     else if (e.key === 'PageUp') { e.preventDefault(); nav(-1); }
     else if (e.key === 'Escape') { clearSelection(); }
+    else if (mod && k === 'z') { e.preventDefault(); doUndo(false); }       // in-field: native text undo wins (checked above)
+    else if (mod && k === 'y') { e.preventDefault(); doUndo(true); }
   }
 
   /* ---------- wiring ---------- */
@@ -810,6 +979,8 @@ function boot() {
     $('#btnOpen').addEventListener('click', openFlow);
     $('#btnSave').addEventListener('click', saveFlow);
     $('#btnSaveAs').addEventListener('click', saveAsFlow);
+    $('#btnUndo').addEventListener('click', () => doUndo(false));
+    $('#btnRedo').addEventListener('click', () => doUndo(true));
 
     $$('.tab').forEach((t) => t.addEventListener('click', () => selectTab(t.dataset.tab)));
     $('#btnViewSettings').addEventListener('click', () => { selectTab('view'); showSettings(true); });
@@ -833,6 +1004,9 @@ function boot() {
     $('#btnRedact').addEventListener('click', execRedact);
     $('#btnClearSel').addEventListener('click', () => { clearSelection(); setMsg('選択を解除しました'); });
     $('#redactTarget').addEventListener('change', updateSelHint);
+    // find & bulk redact (検索して墨消し)
+    $('#btnFind').addEventListener('click', onFindRedact);
+    $('#btnFindRedact').addEventListener('click', onFindRedact);
     // replace
     $('#btnReplace').addEventListener('click', execReplace);
     // page

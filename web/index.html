@@ -26,6 +26,7 @@
     <symbol id="i-page" viewBox="0 0 24 24"><path fill="currentColor" d="M6 2h8l4 4v16H6zm8 1.5V7h3.5z"/></symbol>
     <symbol id="i-ocr" viewBox="0 0 24 24"><path fill="currentColor" d="M4 4h5v2H6v3H4zm11 0h5v5h-2V6h-3zM4 15h2v3h3v2H4zm14 0h2v5h-5v-2h3zM8 9h8v2H8zm0 4h8v2H8z"/></symbol>
     <symbol id="i-export" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2v8h3l-4 5-4-5h3zM5 18h14v3H5z"/></symbol>
+    <symbol id="i-ai" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3zm6.5 10l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8.8-1.9zM6 14.5l.7 1.7 1.7.7-1.7.7-.7 1.7-.7-1.7-1.7-.7 1.7-.7.7-1.7z"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path fill="currentColor" d="M6 6l12 12-1.5 1.5L4.5 7.5zM18 6l1.5 1.5L7.5 19.5 6 18z"/></symbol>
   </defs>
 </svg>
@@ -42,6 +43,8 @@
     <button id="btnOpen" data-busy title="開く (Ctrl+O)"><svg><use href="#i-open"/></svg>開く</button>
     <button id="btnSave" data-busy data-needs-doc title="保存 (Ctrl+S)"><svg><use href="#i-save"/></svg>保存</button>
     <button id="btnSaveAs" data-busy data-needs-doc title="別名保存 (Ctrl+Shift+S)"><svg><use href="#i-saveas"/></svg>別名保存</button>
+    <button id="btnUndo" data-busy data-needs-doc title="元に戻す (Ctrl+Z)"><svg><use href="#i-prev"/></svg>戻す</button>
+    <button id="btnRedo" data-busy data-needs-doc title="やり直し (Ctrl+Y)"><svg><use href="#i-next"/></svg>やり直し</button>
     <div class="docinfo">
       <span id="docName" title="">PDFを開いてください</span>
       <span class="dirty-dot" id="dirtyDot" title="未保存の変更">●未保存</span>
@@ -54,6 +57,7 @@
     <button class="tab" data-tab="replace"><svg><use href="#i-replace"/></svg>文字置換</button>
     <button class="tab" data-tab="page"><svg><use href="#i-page"/></svg>ページ</button>
     <button class="tab" data-tab="ocr"><svg><use href="#i-ocr"/></svg>OCR</button>
+    <button class="tab" data-tab="ai"><svg><use href="#i-ai"/></svg>AI要約</button>
     <button class="tab" data-tab="export"><svg><use href="#i-export"/></svg>書き出し</button>
     <div class="grow"></div>
     <button id="btnViewSettings" class="ghost"><svg><use href="#i-settings"/></svg>表示設定</button>
@@ -75,9 +79,9 @@
     <section class="viewer">
       <div class="viewerbar">
         <button id="btnShowPages" class="icon-btn" title="ページ一覧を表示"><svg><use href="#i-pages"/></svg></button>
-        <button id="btnPrev" class="icon-btn" title="前のページ (PgUp)" data-needs-doc><svg><use href="#i-prev"/></svg></button>
+        <button id="btnPrev" class="icon-btn" title="前のページ (PgUp)" data-busy data-needs-doc><svg><use href="#i-prev"/></svg></button>
         <span id="pageLabel">- / -</span>
-        <button id="btnNext" class="icon-btn" title="次のページ (PgDn)" data-needs-doc><svg><use href="#i-next"/></svg></button>
+        <button id="btnNext" class="icon-btn" title="次のページ (PgDn)" data-busy data-needs-doc><svg><use href="#i-next"/></svg></button>
         <div class="sep" style="width:1px;height:22px;background:var(--line)"></div>
         <span class="seg">
           <button id="btnFitPage" class="small active" data-needs-doc>全体</button>
@@ -135,6 +139,19 @@
           <button id="btnClearSel" data-busy data-needs-doc>選択解除</button>
         </div>
         <p class="note">墨消しは文字データと画像画素を消去します（黒塗りではありません）。回転済みページは誤消去防止のため中止します。</p>
+        <h3 style="margin-top:16px">検索して墨消し</h3>
+        <div class="field">
+          <label for="findQ">検索語（全ページ）</label>
+          <div class="row">
+            <input type="text" id="findQ" placeholder="例：個人情報">
+            <button id="btnFind" data-busy data-needs-doc>検索</button>
+          </div>
+        </div>
+        <div class="result" id="findOut"></div>
+        <div id="findList"></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnFindRedact" class="primary" data-busy data-needs-doc>チェックした候補を墨消し</button>
+        </div>
       </div>
 
       <!-- 文字置換 -->
@@ -204,6 +221,48 @@
         </div>
         <div class="result" id="ocrOut"></div>
         <p class="note">エンジン（Tesseract / NDLOCR-Lite）が無い場合は 501 を表示します。NDLOCR は単語座標を返さないため検索レイヤーは追加されません。</p>
+      </div>
+
+      <!-- AI要約 -->
+      <div class="panel" data-panel="ai" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-ai"/></svg>AI要約</h3>
+        <div class="field">
+          <label for="aiBaseURL">エンドポイント (base_url)</label>
+          <input type="text" id="aiBaseURL" placeholder="https://api.openai.com/v1 などOpenAI互換">
+        </div>
+        <div class="field">
+          <label for="aiKey">APIキー</label>
+          <input type="password" id="aiKey" autocomplete="new-password" placeholder="空欄なら保存済みのキーを維持">
+        </div>
+        <div class="field">
+          <label for="aiModel">モデル</label>
+          <input type="text" id="aiModel" placeholder="例: gpt-4o-mini">
+        </div>
+        <div class="row">
+          <button id="btnAISave">設定を保存</button>
+          <button id="btnAITest">接続テスト</button>
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label>スコープ</label>
+          <label class="check"><input type="radio" name="aiScope" value="all" checked> 全ページ</label>
+          <label class="check"><input type="radio" name="aiScope" value="page"> 現在のページ</label>
+          <label class="check"><input type="radio" name="aiScope" value="range"> 範囲
+            <input type="text" id="aiRange" placeholder="例: 1-3,5" style="width:110px;margin-left:6px">
+          </label>
+          <label class="check"><input type="radio" name="aiScope" value="selection"> 選択範囲（PDF上をドラッグ）</label>
+        </div>
+        <div class="field">
+          <label for="aiPrompt">指示（任意）</label>
+          <input type="text" id="aiPrompt" placeholder="例: 箇条書きで要約">
+        </div>
+        <div class="row">
+          <button id="btnAIRun" class="primary" data-busy data-needs-doc>要約を実行</button>
+        </div>
+        <div class="result" id="aiOut"></div>
+        <div class="row">
+          <button id="btnAICopy" class="small">結果をコピー</button>
+        </div>
+        <p class="note ai-notice">⚠ テキストを設定先のエンドポイントへ送信します（ローカル処理ではありません）。APIキーはユーザー設定フォルダに保存されます（リポジトリ外）。</p>
       </div>
 
       <!-- 書き出し -->

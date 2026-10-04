@@ -205,6 +205,82 @@ def test_dialog_cancel_returns_none():
     assert _client().post("/api/dialog/save", json={}).json() == {"path": None}
 
 
+# ------------------------------------------------- upload save destination
+
+def _upload_sample(client) -> dict:
+    return client.post("/api/upload?filename=sample.pdf",
+                       content=_sample_bytes(pages=2),
+                       headers={"Content-Type": "application/pdf"}).json()
+
+
+def test_save_upload_doc_desktop_routes_through_save_dialog(tmp_path):
+    client = _client()
+    _upload_sample(client)
+    picked = str(tmp_path / "chosen.pdf")
+    seen: dict = {}
+    sv.S["desktop"] = True
+
+    def fake_save(suggested=None):
+        seen["suggested"] = suggested
+        return picked
+
+    sv.register_dialogs(save_fn=fake_save)
+    offered = os.path.basename(sv.S["path"])        # upload name before the switch
+    result = sv.do_save(sv.SaveReq(path=None))
+
+    assert seen["suggested"] == offered             # doc name offered to the dialog
+    assert result["saved"] == picked
+    assert sv.S["path"] == picked                   # document switched to real file
+    assert sv.S["dirty"] is False
+
+
+def test_save_upload_doc_dialog_cancel_returns_cancelled(tmp_path):
+    client = _client()
+    _upload_sample(client)
+    sv.S["desktop"] = True
+    sv.register_dialogs(save_fn=lambda suggested=None: None)   # user cancels
+
+    result = sv.do_save(sv.SaveReq())
+
+    assert result == {"saved": False, "cancelled": True}
+    assert "sumipdf-upload-" in sv.S["path"]        # still the upload temp doc
+    assert sv.S["dirty"] is False                   # nothing saved, state untouched
+
+
+def test_save_upload_doc_browser_mode_is_400_save_as(tmp_path):
+    client = _client()
+    _upload_sample(client)                          # desktop flag stays False
+
+    resp = client.post("/api/save", json={"path": None})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "別名保存してください"
+
+
+def test_save_upload_doc_explicit_path_still_allowed(tmp_path):
+    client = _client()
+    _upload_sample(client)
+    dest = tmp_path / "explicit.pdf"
+
+    result = sv.do_save(sv.SaveReq(path=str(dest)))
+
+    assert result["saved"] == str(dest)             # explicit path needs no dialog
+    assert sv.S["path"] == str(dest)
+
+
+def test_save_relative_path_anchors_to_document_dir(tmp_path, monkeypatch):
+    src = tmp_path / "doc.pdf"
+    src.write_bytes(_sample_bytes())
+    sv.open_pdf(sv.OpenReq(path=str(src)))
+    monkeypatch.chdir(tmp_path)                     # a stray CWD fallback would land here
+
+    result = sv.do_save(sv.SaveReq(path="out.pdf"))
+
+    assert result["saved"] == str(tmp_path / "out.pdf")
+    assert (tmp_path / "out.pdf").is_file()
+    assert sv.S["path"] == str(tmp_path / "out.pdf")
+
+
 # ------------------------------------------------------------------ assets
 
 def test_brand_icon_is_served_as_png():

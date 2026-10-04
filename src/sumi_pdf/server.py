@@ -30,7 +30,7 @@ from .ocr import detect_engines, ocr_page
 
 app = FastAPI(title="SUMIPDF")
 S: dict = {"src": None, "work": None, "path": None, "dirty": False, "stat": None,
-           "n": 0, "pw": None, "desktop": False}
+           "n": 0, "pw": None, "desktop": False, "busy": False}
 
 
 def _asset_root() -> str:
@@ -130,6 +130,93 @@ def _tmpfile() -> str:
     with open(p, "wb") as fh:
         fh.write(S["work"])
     return p
+
+
+# ---------------- undo / redo history ----------------
+# Every destructive edit snapshots S["work"] (plus page count / dirty) right
+# before overwriting it. Caps keep big documents from eating memory: at most
+# UNDO_MAX_STEPS entries and UNDO_MAX_BYTES total, oldest evicted first.
+UNDO_MAX_STEPS = 20
+UNDO_MAX_BYTES = 256 * 1024 * 1024
+_UNDO: list[dict] = []   # snapshots taken BEFORE each edit, oldest first
+_REDO: list[dict] = []   # snapshots captured by undo, oldest first
+
+
+def _snapshot() -> dict:
+    """Everything an edit can destroy: work bytes, page count, dirty flag."""
+    return {"work": S["work"], "n": S["n"], "dirty": S["dirty"]}
+
+
+def _apply_snapshot(sn: dict) -> None:
+    S["work"], S["n"], S["dirty"] = sn["work"], sn["n"], sn["dirty"]
+
+
+def _stack_bytes(stack: list[dict]) -> int:
+    return sum(len(sn["work"]) for sn in stack if sn["work"])
+
+
+def _trim(stack: list[dict]) -> None:
+    while len(stack) > UNDO_MAX_STEPS or _stack_bytes(stack) > UNDO_MAX_BYTES:
+        stack.pop(0)
+
+
+def _clear_history() -> None:
+    """Drop both stacks: called whenever a *different* document state is loaded."""
+    _UNDO.clear()
+    _REDO.clear()
+
+
+def _push_history() -> None:
+    """Call immediately before an edit assigns S["work"].
+
+    Snapshots the current state onto the undo stack (bounded by steps and
+    total bytes, oldest evicted first) and invalidates the redo branch.
+    """
+    if S["work"] is None:
+        return
+    _UNDO.append(_snapshot())
+    _trim(_UNDO)
+    _REDO.clear()
+
+
+class UndoReq(BaseModel):
+    page: int = 0   # current page; echoed back clamped to the restored count
+
+
+def _time_travel(source: list[dict], sink: list[dict], empty: str, page: int) -> dict:
+    if S["work"] is None:
+        raise HTTPException(400, "no document open")
+    if S.get("busy"):
+        raise HTTPException(409, "another operation is in progress")
+    if not source:
+        raise HTTPException(400, empty)
+    S["busy"] = True    # live-reload poll must not race the state swap
+    try:
+        sn = source.pop()
+        sink.append(_snapshot())
+        _trim(sink)
+        _apply_snapshot(sn)
+    finally:
+        S["busy"] = False
+    try:
+        w, h = P.page_size(S["work"], 0)
+    except Exception:
+        w = h = 0
+    return {"undone": True, "pages": S["n"],
+            "page": max(0, min(page, S["n"] - 1)),
+            "size": [round(w, 1), round(h, 1)], "dirty": S["dirty"]}
+
+
+@app.post("/api/undo")
+def do_undo(req: UndoReq | None = None):
+    return _time_travel(_UNDO, _REDO, "nothing to undo",
+                        req.page if req else 0)
+
+
+@app.post("/api/redo")
+def do_redo(req: UndoReq | None = None):
+    return _time_travel(_REDO, _UNDO, "nothing to redo",
+                        req.page if req else 0)
 
 
 class OpenReq(BaseModel):
@@ -264,6 +351,7 @@ async def upload_doc(request: Request, filename: str = "upload.pdf"):
     S["path"], S["dirty"], S["pw"] = dest, False, None
     S["stat"] = _disk_stat(dest)
     S["n"] = P.page_count(data)
+    _clear_history()
     w, h = P.page_size(data, 0)
     return {"path": dest, "pages": S["n"], "size": [round(w, 1), round(h, 1)],
             "fonts": P.font_inventory(data), "stat": S["stat"], "uploaded": True}
@@ -282,6 +370,7 @@ def open_pdf(req: OpenReq):
     S["path"], S["dirty"], S["pw"] = path, False, req.password
     S["stat"] = _disk_stat(path)
     S["n"] = P.page_count(data)
+    _clear_history()
     w, h = P.page_size(data, 0)
     return {"path": path, "pages": S["n"], "size": [round(w, 1), round(h, 1)],
             "fonts": P.font_inventory(data), "stat": S["stat"]}
@@ -308,6 +397,8 @@ def reload_doc(req: ReloadReq):
         raise HTTPException(400, "no document open")
     if S["dirty"]:
         raise HTTPException(409, "unsaved edits in memory; save or discard first")
+    if S.get("busy"):
+        raise HTTPException(409, "busy: undo/redo in progress")
     if not os.path.isfile(S["path"]):
         raise HTTPException(404, f"file gone: {S['path']}")
     data = _open_nolock(S["path"])
@@ -316,6 +407,7 @@ def reload_doc(req: ReloadReq):
     S["src"] = S["work"] = data
     S["n"] = n
     S["stat"] = _disk_stat(S["path"])
+    _clear_history()
     return {"pages": n, "page": page, "stat": S["stat"]}
 
 
@@ -347,6 +439,7 @@ def do_redact(req: RedactReq):
     rects = [tuple(r) for r in req.rects]
     out = R.redact(data, req.page, rects, match_bg=req.match_bg,
                    fill=tuple(req.fill))
+    _push_history()
     S["work"], S["dirty"] = out["bytes"], True
     return {"applied": {"dropped": out["dropped"], "filled": out["filled"]}}
 
@@ -360,14 +453,39 @@ def do_replace(req: ReplaceReq):
         r = T.replace(data, req.page, req.find, req.replace, req.size)
     except Exception as e:
         raise HTTPException(400, str(e))
+    _push_history()
     S["work"], S["dirty"] = r["bytes"], True
     return {"replaced": r["replaced"], "dropped": r["dropped"]}
+
+
+def _is_upload_doc(path: str | None) -> bool:
+    """True when the open document lives under a sumipdf-upload-* temp dir."""
+    if not path:
+        return False
+    parent = os.path.basename(os.path.dirname(os.path.abspath(path)))
+    return parent.startswith("sumipdf-upload-")
 
 
 @app.post("/api/save")
 def do_save(req: SaveReq):
     data = _require()
+    if req.path and not os.path.isabs(req.path) and S["path"]:
+        # Anchor relative names to the open document's folder, never the
+        # server's CWD (which is arbitrary in frozen/desktop mode).
+        req.path = os.path.join(os.path.dirname(os.path.abspath(S["path"])),
+                                req.path)
     out = req.path or S["path"]
+    if req.path is None and _is_upload_doc(out):
+        # Uploads live in a session temp dir: "saving" there is silent data
+        # loss. Desktop must pick a real destination via the native dialog;
+        # browser mode has no dialog, so force the save-as flow.
+        if S.get("desktop"):
+            path = _dialog("save")(suggested=os.path.basename(S["path"]))
+            if not path:
+                return {"saved": False, "cancelled": True}
+            out = path
+        else:
+            raise HTTPException(400, "別名保存してください")
     if out == S["path"]:
         # atomic-ish: write temp then replace (keeps no-lock guarantee)
         fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(out) or None)
@@ -426,6 +544,7 @@ def do_ocr_layer(req: OcrLayerReq):
     except RuntimeError as e:
         raise HTTPException(501, str(e))
     out = textlayer.add_layer_doc(data, req.page, r["words"])
+    _push_history()
     S["work"], S["dirty"] = out, True
     return {"words": len(r["words"]), "lang": r["lang"], "text_head": r["text"][:200]}
 
@@ -483,6 +602,7 @@ def pages_rotate(req: RotateReq):
     data = _require()
     if not 0 <= req.page < S["n"]:
         raise HTTPException(404, "page out of range")
+    _push_history()
     S["work"] = PG.rotate(data, req.page, req.deg)
     S["dirty"] = True
     return {"rotated": [req.page, req.deg]}
@@ -495,6 +615,7 @@ class PagesReq(BaseModel):
 @app.post("/api/pages/delete")
 def pages_delete(req: PagesReq):
     data = _require()
+    _push_history()
     S["work"] = PG.delete_pages(data, req.pnos)
     S["n"] = P.page_count(S["work"])
     S["dirty"] = True
@@ -521,6 +642,7 @@ def pages_insert(req: InsertReq):
     data = _require()
     if not os.path.isfile(req.path):
         raise HTTPException(404, f"not found: {req.path}")
+    _push_history()
     S["work"] = PG.insert_pdf(data, req.path, req.at)
     S["n"] = P.page_count(S["work"])
     S["dirty"] = True
@@ -571,6 +693,7 @@ def img_redact(req: ImgRedactReq):
     r = IR.remove_pixels(data, req.page, [tuple(x) for x in req.rects],
                          fill=tuple(req.fill))
     if r.get("bytes"):
+        _push_history()
         S["work"], S["dirty"] = r["bytes"], True
     return {"edited": r["edited"], "rects": r["rects"]}
 
@@ -602,6 +725,7 @@ class WatermarkReq(BaseModel):
 @app.post("/api/watermark")
 def do_watermark(req: WatermarkReq):
     data = _require()
+    _push_history()
     S["work"] = ST.watermark(data, req.page, req.text, opacity=req.opacity,
                              angle=req.angle, size=req.size)
     S["dirty"] = True
@@ -659,6 +783,144 @@ def do_sanitize(req: SanitizeReq):
                        remove_metadata=req.remove_metadata,
                        remove_links=req.remove_links,
                        remove_annotations=req.remove_annotations)
+
+
+# ---------------- text search -> check -> bulk redaction (Task 5) ----------------
+
+from .findredact import find_candidates  # noqa: E402  (kept with its endpoints)
+
+
+class FindReq(BaseModel):
+    q: str
+    page: int | None = None
+
+
+@app.post("/api/find")
+def do_find(req: FindReq):
+    """候補検索: {q, page?} -> {matches: [{page,x0,y0,x1,y1,context}]}."""
+    data = _require()
+    if req.page is not None and not 0 <= req.page < S["n"]:
+        raise HTTPException(404, "page out of range")
+    try:
+        matches = find_candidates(data, req.q, req.page)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"matches": matches}
+
+
+class RedactBulkReq(BaseModel):
+    rects: list[dict]  # {page, x0, y0, x1, y1} in PDF points
+    fill: list[float] = [1.0, 1.0, 1.0]
+
+
+@app.post("/api/redact-bulk")
+def redact_bulk(req: RedactBulkReq):
+    """チェックした候補を一括墨消し（ページ跨ぎ）: -> {applied:{dropped,filled}}."""
+    data = _require()
+    if not req.rects:
+        return {"applied": {"dropped": 0, "filled": 0}}
+    by_page: dict[int, list[tuple[float, float, float, float]]] = {}
+    for r in req.rects:
+        try:
+            pno = int(r["page"])
+            x0, x1 = sorted((float(r["x0"]), float(r["x1"])))
+            y0, y1 = sorted((float(r["y0"]), float(r["y1"])))
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, f"bad rect: {r!r}")
+        if not 0 <= pno < S["n"]:
+            raise HTTPException(404, f"page out of range: {pno}")
+        by_page.setdefault(pno, []).append((x0, y0, x1, y1))
+    out, dropped, filled = data, 0, 0
+    for pno in sorted(by_page):
+        res = R.redact(out, pno, by_page[pno], match_bg=False, fill=tuple(req.fill))
+        out, dropped, filled = res["bytes"], dropped + res["dropped"], filled + res["filled"]
+    S["work"], S["dirty"] = out, True
+    return {"applied": {"dropped": dropped, "filled": filled}}
+
+
+# ---------------- AI summarize (BYO OpenAI-compatible endpoint, Task 10) ----------------
+# Self-contained block appended at EOF to keep merge surface minimal:
+# one import + three endpoints.
+
+from . import aisum as A  # noqa: E402
+
+
+class AIConfigReq(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    timeout: float = 60.0
+
+
+@app.get("/api/ai/config")
+def ai_config_get():
+    """Masked config (api_key shows only its last 4 chars)."""
+    return A.masked_config(A.load_config())
+
+
+@app.put("/api/ai/config")
+def ai_config_put(req: AIConfigReq):
+    """Save config. Blank api_key keeps the stored one (masked UI round-trip)."""
+    old = A.load_config()
+    key = req.api_key if req.api_key else old.get("api_key", "")
+    cfg = {"base_url": req.base_url.strip(), "api_key": key,
+           "model": req.model.strip(),
+           "timeout": max(1.0, float(req.timeout) if req.timeout else 60.0)}
+    A.save_config(cfg)
+    return {"saved": True, **A.masked_config(cfg)}
+
+
+class AISummarizeReq(BaseModel):
+    scope: str = "all"                      # all | page | range | selection
+    page: int | None = None                 # 0-based, used by page/selection
+    range: str | None = None                # "2-5" / "1,3" / "8-" (1-based)
+    rects: list[list[float]] | None = None  # PDF pt, y-up (selection)
+    prompt: str | None = None
+    text: str | None = None                 # direct text (connection test)
+
+
+def _ai_scope_text(req: AISummarizeReq) -> str:
+    """Same text source as /api/extract, restricted by scope."""
+    if req.text is not None:
+        return req.text
+    data = _require()
+    if req.scope == "all":
+        return "\n\n".join(P.extract_text(data, p) for p in range(S["n"]))
+    if req.scope == "page":
+        pno = 0 if req.page is None else req.page
+        if not 0 <= pno < S["n"]:
+            raise HTTPException(404, "page out of range")
+        return P.extract_text(data, pno)
+    if req.scope == "range":
+        try:
+            pnos = A.parse_pages(req.range or "", S["n"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return "\n\n".join(P.extract_text(data, p) for p in pnos)
+    if req.scope == "selection":
+        pno = 0 if req.page is None else req.page
+        if not 0 <= pno < S["n"]:
+            raise HTTPException(404, "page out of range")
+        if not req.rects:
+            raise HTTPException(400, "選択範囲がありません（先にPDF上をドラッグしてください）")
+        return A.extract_in_rects(data, pno, req.rects)
+    raise HTTPException(400, f"不明な scope: {req.scope}")
+
+
+@app.post("/api/ai/summarize")
+def ai_summarize(req: AISummarizeReq):
+    text = _ai_scope_text(req)
+    if not text.strip():
+        raise HTTPException(400, "テキスト層がありません（OCRを実行してください）")
+    cfg = A.load_config()
+    if not cfg.get("base_url") or not cfg.get("model"):
+        raise HTTPException(400, "AI設定が未登録です（base_url/modelを保存してください）")
+    try:
+        return A.summarize(text, cfg, prompt=req.prompt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, f"AIエンドポイントエラー: {e}")
 
 
 def main():
