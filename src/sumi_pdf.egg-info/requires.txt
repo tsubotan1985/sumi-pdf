@@ -1,0 +1,17 @@
+pymupdf>=1.26
+fonttools>=4.50
+fastapi>=0.110
+uvicorn>=0.29
+mcp>=1.0
+pydantic>=2.0
+
+[app]
+pywebview>=5.0
+
+[build]
+pyinstaller>=6.0
+
+[test]
+pytest>=8.0
+reportlab>=4.0
+pillow>=10.0

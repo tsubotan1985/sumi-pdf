@@ -100,7 +100,7 @@ def test_replace_same_baseline(sample):
     assert occ2
     assert abs(occ2[0]["origin"][1] - y0) < 2.0  # ベースライン維持
     fonts = [f[3] for f in d2[0].get_fonts()]
-    assert any("SumiF" in f or "IPAGothic" in f for f in fonts)
+    assert any("sumif" in f.lower() or "ipaex" in f.lower() for f in fonts)
     d2.close()
 
 

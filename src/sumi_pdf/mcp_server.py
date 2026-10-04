@@ -128,6 +128,11 @@ def handle(method: str, params: dict, pid) -> str | None:
 
 
 def main():
+    try:  # Windows console defaults to cp932; MCP JSON must be UTF-8
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:
