@@ -31,7 +31,15 @@
   <label>操作</label>
   <button class="acc" onclick="doRedact()">墨消し実行（選択範囲）</button>
   <button onclick="doReplace()">文字置換…</button>
-  <button onclick="doOcr()">OCR（このページ）</button>
+  <label>OCR</label>
+  <select id="ocrlang" style="width:100%;padding:4px;background:#17181b;color:#e8e8e8;border:1px solid #444;border-radius:4px">
+    <option value="auto">自動（横/縦判定）</option>
+    <option value="jpn">横書き (jpn)</option>
+    <option value="jpn_vert">縦書き (jpn_vert)</option>
+  </select>
+  <button onclick="doOcr()">OCR実行（このページ）</button>
+  <button onclick="doOcrLayer()">検索可能レイヤー追加</button>
+  <pre id="ocrout" style="max-height:180px;overflow:auto;font-size:11px;background:#17181b;padding:6px;border-radius:4px;white-space:pre-wrap;display:none"></pre>
   <label>保存</label>
   <input type="text" id="savepath" placeholder="空欄なら上書き保存">
   <button onclick="doSave()">保存</button>
@@ -97,8 +105,18 @@ async function doReplace(){
   drag=null; render();
 }
 async function doOcr(){
-  const r=await fetch(`/api/ocr/${pno}`,{method:'POST'});
-  const j=await r.json(); msg(r.ok?(j.engine+'：'+j.text.slice(0,60)+'…'):'ERR '+await r.text());
+  const r=await fetch(`/api/ocr/${pno}?lang=${document.getElementById('ocrlang').value}`,{method:'POST'});
+  const j=await r.json();
+  const out=document.getElementById('ocrout'); out.style.display='block';
+  if(r.ok){ out.textContent=j.text||'(空)'; msg(`OCR完了 engine=${j.engine} lang=${j.lang} words=${j.words.length}`); }
+  else { out.textContent=''; msg('ERR '+ (j.detail||'')); }
+}
+async function doOcrLayer(){
+  const r=await fetch('/api/ocr-layer',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({page:pno,lang:document.getElementById('ocrlang').value})});
+  const j=await r.json();
+  msg(r.ok?`レイヤー追加 ${j.inserted}/${j.words}語 (lang=${j.lang})。保存で確定`:'ERR '+(j.detail||''));
+  render();
 }
 async function doSave(){
   const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from . import fonts as F
 from . import redact as R
 from . import textedit as T
+from . import textlayer
 from .ocr import detect_engines, ocr_page
 
 app = FastAPI(title="Sumi PDF")
@@ -130,13 +131,32 @@ def ocr_engines():
 
 
 @app.post("/api/ocr/{pno}")
-def do_ocr(pno: int):
+def do_ocr(pno: int, lang: str = "auto"):
     if not S["path"]:
         raise HTTPException(400, "no document open")
     try:
-        return ocr_page(S["path"], pno)
+        return ocr_page(S["path"], pno, lang=lang)
     except RuntimeError as e:
         raise HTTPException(501, str(e))
+
+
+class OcrLayerReq(BaseModel):
+    page: int
+    lang: str = "auto"
+
+
+@app.post("/api/ocr-layer")
+def do_ocr_layer(req: OcrLayerReq):
+    """OCR the page then write an invisible text layer into the open document."""
+    if not S["doc"]:
+        raise HTTPException(400, "no document open")
+    try:
+        r = ocr_page(S["path"], req.page, lang=req.lang)
+    except RuntimeError as e:
+        raise HTTPException(501, str(e))
+    n = textlayer.add_layer_doc(S["doc"], req.page, r["words"])
+    return {"words": len(r["words"]), "inserted": n, "lang": r["lang"],
+            "text_head": r["text"][:200]}
 
 
 def main():

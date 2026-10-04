@@ -10,6 +10,14 @@
 - **MCPサーバ**: `sumi-mcp` — Hermes / Claude Code から redact_pdf / replace_text / extract_text / ocr_pdf_page を直接呼べる
 - **HTTP API**: `sumi-server`（127.0.0.1:8765）
 
+## OCR
+- エンジン: tesseract 5（jpn + jpn_vert、同梱 tessdata は tessdata_fast）
+- 探索順: `SUMI_TESSERACT` env → PATH → `~/.pixi/bin/tesseract` → `C:\Program Files\Tesseract-OCR\tesseract.exe`
+- WSL: `~/.pixi/bin/pixi global install tesseract`（済）。Windows: `winget install UB-Mannheim.TesseractOCR`
+- 精度を上げたい場合: [tessdata_best](https://github.com/tesseract-ocr/tessdata_best) の jpn/jpn_vert を `tools/tessdata/` に上書き（fastより約3倍のサイズ）
+- 「検索可能レイヤー追加」: OCR結果を不可視テキスト（render_mode=3）として同一座標に埋め込み → スキャンPDFが検索・コピー可能になる
+- NDLOCR-Lite（縦書き・手書き特化）は実験的フック `SUMI_OCRLITE_SRC`（ndl-lab/ndlocr-lite の clone + 依存導入済みディレクトリ）
+
 ## 実行（Windows）
 ```
 py -3.12 -m venv .venv
