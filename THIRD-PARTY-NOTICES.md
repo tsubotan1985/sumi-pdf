@@ -15,11 +15,16 @@ Runtime dependencies (pip)
 
 OCR engines
 -----------
-- NDLOCR-Lite   National Diet Library, Japan — CC-BY-4.0
-                https://github.com/ndl-lab/ndlocr-lite (bundled at third_party/ndlocr-lite)
 - tesseract     Apache-2.0 — https://github.com/tesseract-ocr/tesseract
+                (external install; the released EXE calls the system tesseract)
 - tessdata_fast Apache-2.0 — https://github.com/tesseract-ocr/tessdata_fast
-                license copy: tools/tessdata/LICENSE
+                bundled; license copy: tools/tessdata/LICENSE
+- NDLOCR-Lite   National Diet Library, Japan — CC-BY-4.0
+                https://github.com/ndl-lab/ndlocr-lite
+                **Not bundled**: optional component fetched by
+                `scripts/setup_third_party.sh` into a local, gitignored
+                `third_party/` directory. It is neither part of this
+                repository nor included in the released EXE build.
 
 Fonts (fonts/, see fonts/LICENSES.md for the full list)
 -------------------------------------------------------
@@ -30,10 +35,11 @@ Fonts (fonts/, see fonts/LICENSES.md for the full list)
 - Liberation Sans / Serif (v2.1.5, OFL) SIL Open Font License 1.1
                 license copy + per-font copyright lines: fonts/OFL.txt
 
-Model files (bundled with NDLOCR-Lite)
---------------------------------------
-- DEIMv2, PARSeq, PaddleOCR components — Apache-2.0 (see third_party/ndlocr-lite)
-- DINOv3 — see third_party/ndlocr-lite/app/licenses/DINOv3-License.txt
+OCR model files (NDLOCR-Lite, optional — not bundled)
+-----------------------------------------------------
+- DEIMv2, PARSeq, PaddleOCR components — Apache-2.0 (upstream: ndl-lab/ndlocr-lite)
+- DINOv3 — Meta custom license (upstream: ndl-lab/ndlocr-lite; see
+  third_party/ndlocr-lite/app/licenses/DINOv3-License.txt when installed)
 
-Full license texts are kept in third_party/ndlocr-lite/app/licenses/ and in the
-upstream repositories listed above.
+Full license texts are kept in the upstream repositories listed above (and in
+the local third_party/ndlocr-lite checkout when installed).

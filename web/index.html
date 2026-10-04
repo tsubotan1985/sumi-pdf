@@ -2,221 +2,314 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>Sumi PDF</title>
-<style>
-  :root { --bg:#1b1d21; --fg:#e8e8e8; --acc:#d23; --panel:#26282d; }
-  body { margin:0; font-family:"Meiryo",system-ui,sans-serif; background:var(--bg); color:var(--fg); display:flex; height:100vh; }
-  #side { width:270px; background:var(--panel); padding:12px; box-sizing:border-box; overflow:auto; }
-  #side h1 { font-size:16px; margin:0 0 10px; }
-  #side label { font-size:12px; color:#aaa; display:block; margin:8px 0 2px; }
-  input[type=text] { width:100%; box-sizing:border-box; padding:5px; background:#17181b; color:var(--fg); border:1px solid #444; border-radius:4px; }
-  button { padding:6px 10px; margin:3px 2px 3px 0; background:#3a3d43; color:var(--fg); border:1px solid #555; border-radius:4px; cursor:pointer; font-size:12px; }
-  button.acc { background:var(--acc); border-color:var(--acc); color:#fff; }
-  button:hover { filter:brightness(1.15); }
-  #main { flex:1; display:flex; flex-direction:column; min-width:0; }
-  #bar { padding:6px 10px; background:var(--panel); display:flex; align-items:center; gap:6px; }
-  #wrap { flex:1; overflow:auto; text-align:center; position:relative; }
-  canvas { margin:10px auto; box-shadow:0 2px 14px #0008; cursor:crosshair; }
-  #msg { font-size:12px; color:#9bd; min-width:180px; text-align:right; }
-  #fontlist { font-size:11px; line-height:1.5; color:#bbb; white-space:pre-wrap; }
-  .hint { font-size:11px; color:#888; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUMIPDF</title>
+<link rel="icon" href="/assets/icon.png">
+<link rel="stylesheet" href="/assets/web/style.css">
 </head>
 <body>
-<div id="side">
-  <h1>SUMIPDF <span style="color:#d23">墨</span></h1>
-  <label>PDF パス</label>
-  <input type="text" id="path" placeholder="C:\path\to.pdf">
-  <button onclick="openPdf()">開く</button>
-  <label><input type="checkbox" id="autoreload" checked> 外部更新を自動再読込（Sumatra風）</label>
-  <label>操作</label>
-  <button class="acc" onclick="doRedact()">墨消し実行（選択範囲）</button>
-  <button onclick="doReplace()">文字置換…</button>
-  <label>OCR</label>
-  <select id="ocrlang" style="width:100%;padding:4px;background:#17181b;color:#e8e8e8;border:1px solid #444;border-radius:4px">
-    <option value="auto">自動（横/縦判定）</option>
-    <option value="jpn">横書き (jpn)</option>
-    <option value="jpn_vert">縦書き (jpn_vert)</option>
-    <option value="ndl">NDLOCR-Lite（縦書き・手書き高精度）</option>
-  </select>
-  <button onclick="doOcr()">OCR実行（このページ）</button>
-  <button onclick="doOcrLayer()">検索可能レイヤー追加</button>
-  <pre id="ocrout" style="max-height:180px;overflow:auto;font-size:11px;background:#17181b;padding:6px;border-radius:4px;white-space:pre-wrap;display:none"></pre>
-  <label>暗号化</label>
-  <button onclick="doEncrypt()">パスワード設定（AES-256）</button>
-  <button onclick="doDecrypt()">パスワード解除</button>
-  <label>保存</label>
-  <input type="text" id="savepath" placeholder="空欄なら上書き保存">
-  <button onclick="doSave()">保存</button>
-  <label>ページ操作</label>
-  <button onclick="doRotate(90)">↻ 90°回転</button>
-  <button onclick="doPagesDelete()">現在ページを削除</button>
-  <button onclick="doInsert()">PDFを追加…</button>
-  <button onclick="doSplit()">全ページ分割保存</button>
-  <label>その他（Stirling機能）</label>
-  <button onclick="doCompress()">圧縮して別名保存</button>
-  <button onclick="doWatermark()">透かし追加…</button>
-  <button onclick="doPageNumbers()">ページ番号を付与</button>
-  <button onclick="doSanitize()">個人情報除去（Sanitize）</button>
-  <button onclick="doImgRedact()">選択範囲の画像も完全消去</button>
-  <label>フォントフォールバック（開いている文書）</label>
-  <div id="fontlist">-</div>
-  <div class="hint" style="margin-top:10px">ドラッグで矩形→墨消し。<br>墨消しは文字データと画像画素を消す（黒塗りではない）。<br>文字置換は同じ位置に代替フォントで再挿入。<br>ファイルはロックしない。他アプリが上書き保存すると自動で再読込（未保存編集がある場合は警告）。</div>
-</div>
-<div id="main">
-  <div id="bar">
-    <button onclick="nav(-1)">◀</button>
-    <span id="pageno">-/-</span>
-    <button onclick="nav(1)">▶</button>
-    <select id="dpi" onchange="render()"><option>96</option><option selected>120</option><option>160</option><option>200</option></select>
-    <span id="msg"></span>
+
+<!-- inline icon sprite (no CDN, no icon fonts) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-open" viewBox="0 0 24 24"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 2v5h7V5H7zm5 8a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></symbol>
+    <symbol id="i-saveas" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3h10l3 3v6h-2V7l-1-1h-1v3H7V5H5v14h5v2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm7 10h9v2h-4.2l3.6 3.6-1.4 1.4-3.6-3.6V21h-2v-8z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path fill="currentColor" d="M15 5l-7 7 7 7z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path fill="currentColor" d="M9 5l7 7-7 7z"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path fill="currentColor" d="M5 11h14v2H5z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></symbol>
+    <symbol id="i-pages" viewBox="0 0 24 24"><path fill="currentColor" d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 4l-2-1 .3-2-2-2-2 .3L13 3h-2l-1 2.3L8 5 6 7l.3 2L4 12l2 1-.3 2 2 2 2-.3L11 21h2l1-2.3 2 .3 2-2-.3-2z"/></symbol>
+    <symbol id="i-redact" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5h18v3H3zm2 5h9v2H5zm0 4h9v2H5zm14-3l-6 6 4 4 6-6z" opacity=".9"/></symbol>
+    <symbol id="i-replace" viewBox="0 0 24 24"><path fill="currentColor" d="M7 4l-4 4 4 4V9h9V7H7V4zm10 12l4-4-4-4v3H8v2h9v3z"/></symbol>
+    <symbol id="i-page" viewBox="0 0 24 24"><path fill="currentColor" d="M6 2h8l4 4v16H6zm8 1.5V7h3.5z"/></symbol>
+    <symbol id="i-ocr" viewBox="0 0 24 24"><path fill="currentColor" d="M4 4h5v2H6v3H4zm11 0h5v5h-2V6h-3zM4 15h2v3h3v2H4zm14 0h2v5h-5v-2h3zM8 9h8v2H8zm0 4h8v2H8z"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2v8h3l-4 5-4-5h3zM5 18h14v3H5z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path fill="currentColor" d="M6 6l12 12-1.5 1.5L4.5 7.5zM18 6l1.5 1.5L7.5 19.5 6 18z"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+
+  <!-- ============ top bar ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="/assets/icon.png" alt="SUMIPDF">
+      <div class="name">SUMI<span>PDF</span></div>
+    </div>
+    <div class="sep"></div>
+    <button id="btnOpen" data-busy title="開く (Ctrl+O)"><svg><use href="#i-open"/></svg>開く</button>
+    <button id="btnSave" data-busy data-needs-doc title="保存 (Ctrl+S)"><svg><use href="#i-save"/></svg>保存</button>
+    <button id="btnSaveAs" data-busy data-needs-doc title="別名保存 (Ctrl+Shift+S)"><svg><use href="#i-saveas"/></svg>別名保存</button>
+    <div class="docinfo">
+      <span id="docName" title="">PDFを開いてください</span>
+      <span class="dirty-dot" id="dirtyDot" title="未保存の変更">●未保存</span>
+    </div>
+  </header>
+
+  <!-- ============ tool tabs ============ -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="redact"><svg><use href="#i-redact"/></svg>墨消し</button>
+    <button class="tab" data-tab="replace"><svg><use href="#i-replace"/></svg>文字置換</button>
+    <button class="tab" data-tab="page"><svg><use href="#i-page"/></svg>ページ</button>
+    <button class="tab" data-tab="ocr"><svg><use href="#i-ocr"/></svg>OCR</button>
+    <button class="tab" data-tab="export"><svg><use href="#i-export"/></svg>書き出し</button>
+    <div class="grow"></div>
+    <button id="btnViewSettings" class="ghost"><svg><use href="#i-settings"/></svg>表示設定</button>
+  </nav>
+
+  <!-- ============ workspace ============ -->
+  <div class="workspace">
+
+    <!-- left: page thumbnails -->
+    <aside class="panel-col" id="pagesPanel">
+      <div class="panel-head">
+        <span><svg style="width:14px;height:14px;vertical-align:-2px"><use href="#i-pages"/></svg> ページ</span>
+        <button id="btnTogglePages" class="icon-btn" title="ページ一覧を隠す"><svg><use href="#i-close"/></svg></button>
+      </div>
+      <div id="thumbList"></div>
+    </aside>
+
+    <!-- center: viewer -->
+    <section class="viewer">
+      <div class="viewerbar">
+        <button id="btnShowPages" class="icon-btn" title="ページ一覧を表示"><svg><use href="#i-pages"/></svg></button>
+        <button id="btnPrev" class="icon-btn" title="前のページ (PgUp)" data-needs-doc><svg><use href="#i-prev"/></svg></button>
+        <span id="pageLabel">- / -</span>
+        <button id="btnNext" class="icon-btn" title="次のページ (PgDn)" data-needs-doc><svg><use href="#i-next"/></svg></button>
+        <div class="sep" style="width:1px;height:22px;background:var(--line)"></div>
+        <span class="seg">
+          <button id="btnFitPage" class="small active" data-needs-doc>全体</button>
+          <button id="btnFitWidth" class="small" data-needs-doc>幅</button>
+          <button id="btnFit100" class="small" data-needs-doc>100%</button>
+        </span>
+        <button id="btnZoomOut" class="icon-btn" title="縮小" data-needs-doc><svg><use href="#i-minus"/></svg></button>
+        <span id="zoomLabel">100%</span>
+        <button id="btnZoomIn" class="icon-btn" title="拡大" data-needs-doc><svg><use href="#i-plus"/></svg></button>
+        <div class="grow"></div>
+        <button id="btnToggleSettings" class="icon-btn" title="設定を隠す"><svg><use href="#i-close"/></svg></button>
+      </div>
+      <div class="canvaswrap" id="canvaswrap">
+        <div class="pagehost" id="pagehost">
+          <canvas id="cv" width="10" height="10"></canvas>
+          <canvas id="overlay" width="10" height="10"></canvas>
+        </div>
+        <div class="empty" id="emptyHint">
+          <img src="/assets/icon.png" alt="">
+          <div class="big">PDFを開く</div>
+          <div>「開く」でPDFを選択してください。<br>ドラッグで範囲を選び、墨消しを実行できます。</div>
+          <button id="btnOpenEmpty" class="primary"><svg><use href="#i-open"/></svg>開く</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- right: settings for the active tab only -->
+    <aside class="panel-col" id="settingsPanel">
+
+      <!-- 墨消し -->
+      <div class="panel" data-panel="redact">
+        <h3><svg style="width:15px;height:15px"><use href="#i-redact"/></svg>墨消し設定</h3>
+        <div class="field">
+          <label for="redactTarget">対象</label>
+          <select id="redactTarget">
+            <option value="text_image">文字＋画像</option>
+            <option value="text">文字のみ</option>
+            <option value="image">画像のみ</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="redactFill">塗りつぶし</label>
+          <select id="redactFill">
+            <option value="white">白</option>
+            <option value="black">黒</option>
+            <option value="background">背景に合わせる</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>選択範囲</label>
+          <div class="selhint" id="selStatus">未選択 — PDF上をドラッグしてください</div>
+        </div>
+        <div class="row">
+          <button id="btnRedact" class="primary" data-busy data-needs-doc>墨消し実行</button>
+          <button id="btnClearSel" data-busy data-needs-doc>選択解除</button>
+        </div>
+        <p class="note">墨消しは文字データと画像画素を消去します（黒塗りではありません）。回転済みページは誤消去防止のため中止します。</p>
+      </div>
+
+      <!-- 文字置換 -->
+      <div class="panel" data-panel="replace" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-replace"/></svg>文字置換</h3>
+        <div class="field">
+          <label for="replaceFind">検索する文字列</label>
+          <input type="text" id="replaceFind" placeholder="このページ内の文字列">
+        </div>
+        <div class="field">
+          <label for="replaceTo">置換後の文字列</label>
+          <input type="text" id="replaceTo" placeholder="">
+        </div>
+        <div class="row">
+          <button id="btnReplace" data-busy data-needs-doc>置換を実行</button>
+        </div>
+        <div class="result" id="replaceOut"></div>
+        <p class="note">同じ位置に代替フォントで再配置します。埋め込みフォントの無い文書では行送りが変わる場合があります。</p>
+      </div>
+
+      <!-- ページ -->
+      <div class="panel" data-panel="page" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-page"/></svg>ページ操作</h3>
+        <div class="field">
+          <label>回転</label>
+          <div class="row">
+            <button id="btnRot90" data-busy data-needs-doc>↻ 90°</button>
+            <button id="btnRot270" data-busy data-needs-doc>↺ 270°</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>削除</label>
+          <button id="btnDeletePage" data-busy data-needs-doc>現在ページを削除</button>
+        </div>
+        <div class="field">
+          <label for="insertPath">PDFを追加（パス）</label>
+          <input type="text" id="insertPath" placeholder="末尾に追加するPDFのパス">
+          <div class="row" style="margin-top:6px">
+            <button id="btnInsertPdf" data-busy data-needs-doc>追加</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>書き出し</label>
+          <div class="row">
+            <button id="btnExtract" data-busy data-needs-doc>このページを抽出</button>
+            <button id="btnSplit" data-busy data-needs-doc>全ページ分割</button>
+          </div>
+        </div>
+        <p class="note">最後の1ページは削除できません。削除は確認後に実行されます。</p>
+      </div>
+
+      <!-- OCR -->
+      <div class="panel" data-panel="ocr" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-ocr"/></svg>OCR</h3>
+        <div class="field">
+          <label for="ocrLang">言語</label>
+          <select id="ocrLang">
+            <option value="auto">自動（横/縦判定）</option>
+            <option value="jpn">横書き (jpn)</option>
+            <option value="jpn_vert">縦書き (jpn_vert)</option>
+            <option value="ndl">NDLOCR-Lite（縦書き・手書き高精度）</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="btnOcr" data-busy data-needs-doc>OCR実行（このページ）</button>
+          <button id="btnOcrLayer" data-busy data-needs-doc>検索用レイヤー追加</button>
+        </div>
+        <div class="result" id="ocrOut"></div>
+        <p class="note">エンジン（Tesseract / NDLOCR-Lite）が無い場合は 501 を表示します。NDLOCR は単語座標を返さないため検索レイヤーは追加されません。</p>
+      </div>
+
+      <!-- 書き出し -->
+      <div class="panel" data-panel="export" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-export"/></svg>書き出し</h3>
+        <div class="field">
+          <label>圧縮（品質は自動・スライダーなし）</label>
+          <button id="btnCompress" data-busy data-needs-doc>圧縮して別名保存</button>
+        </div>
+        <div class="field">
+          <label for="wmText">透かし文字</label>
+          <input type="text" id="wmText" placeholder="CONFIDENTIAL">
+          <div class="row" style="margin-top:6px">
+            <button id="btnWatermark" data-busy data-needs-doc>透かしを追加</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>ページ番号</label>
+          <button id="btnPageNumbers" data-busy data-needs-doc>ページ番号を付与</button>
+        </div>
+        <h3 style="margin-top:16px">暗号化 / 解除</h3>
+        <div class="field">
+          <label for="encUser">パスワード</label>
+          <input type="password" id="encUser" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label for="encUser2">パスワード（確認）</label>
+          <input type="password" id="encUser2" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label>許可</label>
+          <label class="check"><input type="checkbox" id="encPrint" checked> 印刷</label>
+          <label class="check"><input type="checkbox" id="encCopy" checked> コピー</label>
+          <label class="check"><input type="checkbox" id="encModify"> 編集</label>
+          <label class="check"><input type="checkbox" id="encAnnotate" checked> 注釈</label>
+          <label class="check"><input type="checkbox" id="encForms" checked> フォーム入力</label>
+          <label class="check"><input type="checkbox" id="encAssemble"> ページ挿入/削除</label>
+          <label class="check"><input type="checkbox" id="encPrintHigh"> 高解像度印刷</label>
+        </div>
+        <button id="btnEncrypt" class="primary" data-busy data-needs-doc>暗号化して保存（AES-256）</button>
+        <div class="field" style="margin-top:12px">
+          <label for="decPw">解除パスワード</label>
+          <input type="password" id="decPw" autocomplete="off">
+          <div class="row" style="margin-top:6px">
+            <button id="btnDecrypt" data-busy data-needs-doc>暗号化を解除して保存</button>
+          </div>
+        </div>
+        <h3 style="margin-top:16px">文書情報</h3>
+        <div class="row">
+          <button id="btnMetaGet" data-busy>文書情報を取得</button>
+        </div>
+        <div class="result" id="metaOut"></div>
+        <h3 style="margin-top:16px">文書情報の削除（JS/添付/メタ）</h3>
+        <button id="btnSanitize" data-busy data-needs-doc>文書情報の削除</button>
+        <p class="note">埋め込まれた JavaScript・添付ファイル・文書メタデータ・注釈・リンクを除去した<b>複製</b>を作成します。<b>本文中の文字として書かれた個人情報は消えません</b>（それには墨消しを使ってください）。</p>
+      </div>
+
+      <!-- 表示設定 -->
+      <div class="panel" data-panel="view" hidden>
+        <h3><svg style="width:15px;height:15px"><use href="#i-settings"/></svg>表示設定</h3>
+        <label class="check"><input type="checkbox" id="autoreload" checked> 外部更新を自動再読込（Sumatra風）</label>
+        <div class="field" style="margin-top:12px">
+          <label>フォントフォールバック（開いている文書）</label>
+          <div id="fontlist">-</div>
+          <div class="row" style="margin-top:6px">
+            <button id="btnFonts" class="small" data-needs-doc>フォント一覧を更新</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>パネル</label>
+          <div class="row">
+            <button id="btnShowPages2" class="small">ページ一覧を表示</button>
+          </div>
+        </div>
+      </div>
+
+    </aside>
   </div>
-  <div id="wrap"><canvas id="cv" width="10" height="10"></canvas></div>
+
+  <!-- ============ status bar ============ -->
+  <footer class="statusbar">
+    <span class="busy-dot" id="busyDot"></span>
+    <span id="statusHint">範囲をドラッグして選択</span>
+    <span id="statusMsg"></span>
+    <span id="statusMode">ローカル処理</span>
+  </footer>
 </div>
-<script>
-let pages=0, pno=0, scale=1, drag=null, lastStat=null, dirtyNotified=false;
-const cv=document.getElementById('cv'), ctx=cv.getContext('2d'), wrap=document.getElementById('wrap');
-function msg(t){document.getElementById('msg').textContent=t;}
-async function openPdf(){
-  const r=await fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:document.getElementById('path').value})});
-  if(!r.ok){msg(await r.text());return;}
-  const j=await r.json(); pages=j.pages; pno=0; lastStat=j.stat; dirtyNotified=false;
-  document.getElementById('fontlist').textContent=j.fonts.map(f=>f.name+(f.embedded?'':' (未埋込)')).join('\n')||'なし';
-  render();
-}
-async function checkExternalUpdate(){
-  if(!pages || !document.getElementById('autoreload').checked) return;
-  let fi; try { fi=await (await fetch('/api/fileinfo')).json(); } catch { return; }
-  if(fi.disk.missing){ msg('⚠ ファイルが移動/削除されました'); return; }
-  if(lastStat && fi.disk.mtime===lastStat.mtime && fi.disk.size===lastStat.size) { dirtyNotified=false; return; }
-  if(fi.dirty){
-    if(!dirtyNotified){ msg('⚠ 他アプリがPDFを更新。未保存の編集があります→保存 or 再度「開く」'); dirtyNotified=true; }
-    return;
-  }
-  const r=await fetch('/api/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno})});
-  if(!r.ok) return;
-  const j=await r.json();
-  const wasDirty=fi.dirty;
-  pages=j.pages; pno=j.page; lastStat=j.stat;
-  msg('↻ 他アプリによる更新を検出、再読み込みしました');
-  render();
-}
-setInterval(checkExternalUpdate, 2000);
-async function render(){
-  if(!pages)return;
-  const dpi=+document.getElementById('dpi').value;
-  const r=await fetch(`/api/page/${pno}?dpi=${dpi}`);
-  if(!r.ok){msg(await r.text());return;}
-  const bmp=await createImageBitmap(await r.blob());
-  scale=dpi/72;
-  cv.width=bmp.width; cv.height=bmp.height;
-  ctx.drawImage(bmp,0,0);
-  document.getElementById('pageno').textContent=`${pno+1}/${pages}`;
-  msg('');
-}
-function nav(d){ if(pages){ pno=Math.min(pages-1,Math.max(0,pno+d)); render(); } }
-cv.addEventListener('mousedown',e=>{drag=[e.offsetX,e.offsetY,e.offsetX,e.offsetY];});
-cv.addEventListener('mousemove',e=>{ if(!drag)return; drag[2]=e.offsetX; drag[3]=e.offsetY; render().then(drawDrag); });
-cv.addEventListener('mouseup',()=>{ if(drag) drawDrag(); });
-function drawDrag(){ if(!drag)return; ctx.save(); ctx.strokeStyle='#d23'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
-  ctx.strokeRect(Math.min(drag[0],drag[2]),Math.min(drag[1],drag[3]),Math.abs(drag[2]-drag[0]),Math.abs(drag[3]-drag[1])); ctx.restore(); }
-function selRect(){ if(!drag) return null;
-  const x0=Math.min(drag[0],drag[2])/scale, y0=Math.min(drag[1],drag[3])/scale;
-  const x1=Math.max(drag[0],drag[2])/scale, y1=Math.max(drag[1],drag[3])/scale;
-  if(x1-x0<3||y1-y0<3) return null; return [x0,y0,x1,y1]; }
-async function doRedact(){
-  const rect=selRect(); if(!rect){msg('範囲をドラッグしてください');return;}
-  const r=await fetch('/api/redact',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({page:pno,rects:[rect]})});
-  msg(r.ok?'墨消ししました':'ERR '+await r.text()); drag=null; render();
-}
-async function doReplace(){
-  const f=prompt('置換したい文字列（このページ内）'); if(!f)return;
-  const t=prompt('置換後の文字列'); if(t==null)return;
-  const r=await fetch('/api/replace',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({page:pno,find:f,replace:t})});
-  const j=await r.json(); msg(r.ok?`${j.replaced}件置換 (font:${(j.font||'').split(/[\\/]/).pop()})`:'ERR '+await r.text());
-  drag=null; render();
-}
-async function doOcr(){
-  const r=await fetch(`/api/ocr/${pno}?lang=${document.getElementById('ocrlang').value}`,{method:'POST'});
-  const j=await r.json();
-  const out=document.getElementById('ocrout'); out.style.display='block';
-  if(r.ok){ out.textContent=j.text||'(空)'; msg(`OCR完了 engine=${j.engine} lang=${j.lang} words=${j.words.length}`); }
-  else { out.textContent=''; msg('ERR '+ (j.detail||'')); }
-}
-async function doOcrLayer(){
-  const r=await fetch('/api/ocr-layer',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({page:pno,lang:document.getElementById('ocrlang').value})});
-  const j=await r.json();
-  msg(r.ok?`レイヤー追加 ${j.inserted}/${j.words}語 (lang=${j.lang})。保存で確定`:'ERR '+(j.detail||''));
-  render();
-}
-async function doEncrypt(){
-  const up=prompt('ユーザーパスワード（開くときに要求）'); if(up==null||!up)return;
-  const op=prompt('オーナーパスワード（権限変更用・空なら同パスワード）')||'';
-  const copy=confirm('コピーを許可しますか？ OK=許可 / キャンセル=禁止');
-  const r=await fetch('/api/encrypt',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({user_pw:up,owner_pw:op,allow:{copy:copy,modify:false,print:true,annotate:true,forms:true}})});
-  const j=await r.json(); msg(r.ok?('暗号化保存: '+j.saved):'ERR '+(j.detail||''));
-}
-async function doDecrypt(){
-  const pw=prompt('パスワード（空欄なら owner-only PDF）')||'';
-  const r=await fetch('/api/decrypt',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({password:pw})});
-  const j=await r.json(); msg(r.ok?('復号保存: '+j.saved):'ERR '+(j.detail||''));
-}
-async function doSave(){
-  const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({path:document.getElementById('savepath').value||null})});
-  const j=await r.json(); msg(r.ok?('保存: '+j.saved):'ERR '+await r.text());
-  if(r.ok && j.stat){ lastStat=j.stat; dirtyNotified=false; }
-}
-async function doRotate(d){
-  const r=await fetch('/api/pages/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno,deg:d})});
-  msg(r.ok?`p${pno+1}を${d}°回転`:'ERR '+await r.text()); render();
-}
-async function doPagesDelete(){
-  if(!confirm(`p${pno+1}を削除しますか？`))return;
-  const r=await fetch('/api/pages/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pnos:[pno]})});
-  const j=await r.json(); msg(r.ok?`削除、全${j.pages}ページ`:'ERR '+await r.text());
-  pno=Math.min(pno, j.pages-1); render();
-}
-async function doInsert(){
-  const p=prompt('追加するPDFのパス'); if(!p)return;
-  const r=await fetch('/api/insert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,at:null})});
-  const j=await r.json(); msg(r.ok?`追加、全${j.pages}ページ`:'ERR '+await r.text()); render();
-}
-async function doSplit(){
-  const r=await fetch('/api/split',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  const j=await r.json(); msg(r.ok?('分割: '+j.files.length+'ファイル'):'ERR '+await r.text());
-}
-async function doCompress(){
-  const r=await fetch('/api/compress',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  const j=await r.json(); msg(r.ok?(`圧縮: ${j.before}→${j.after}バイト (${Math.round(j.ratio*100)}%) ${j.out}`):'ERR '+await r.text());
-}
-async function doWatermark(){
-  const t=prompt('透かしテキスト','CONFIDENTIAL'); if(!t)return;
-  const r=await fetch('/api/watermark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:pno,text:t})});
-  msg(r.ok?'透かし追加（保存で反映）':'ERR '+await r.text()); render();
-}
-async function doPageNumbers(){
-  const r=await fetch('/api/page-numbers',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  const j=await r.json(); msg(r.ok?('ページ番号: '+j.out):'ERR '+await r.text());
-}
-async function doSanitize(){
-  if(!confirm('JavaScript・添付ファイル・メタデータを除去した複製を作りますか？'))return;
-  const r=await fetch('/api/sanitize',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  const j=await r.json(); msg(r.ok?('Sanitize: '+j.out+' (js:'+j.js+' files:'+j.files+' meta:'+j.meta+')'):'ERR '+await r.text());
-}
-async function doImgRedact(){
-  if(!drag||!drag.done){msg('先に画像を消したい範囲をドラッグ');return;}
-  const [x0,y0,x1,y1]=drag.rect;
-  const r=await fetch('/api/img-redact',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({page:pno,rects:[[Math.min(x0,x1),Math.min(y0,y1),Math.max(x0,x1),Math.max(y0,y1)]]})});
-  const j=await r.json(); msg(r.ok?(`画像画素を完全消去 (${j.edited.length}画像)`):'ERR '+await r.text());
-  render();
-}
-</script>
+
+<!-- ============ open fallback modal (browser mode) ============ -->
+<div class="modal-bg" id="openModal" hidden>
+  <div class="modal">
+    <h2>PDFを開く（ブラウザ表示）</h2>
+    <p class="note">デスクトップアプリではネイティブのファイル選択が使われます。ブラウザ表示ではファイル選択（アップロード）またはパス入力を使います。</p>
+    <div class="file-drop" id="btnPickFile">ここをクリックしてPDFファイルを選択</div>
+    <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden>
+    <div class="field" style="margin-top:12px">
+      <label for="openPath">またはPDFのパス</label>
+      <input type="text" id="openPath" placeholder="/path/to/document.pdf">
+    </div>
+    <div class="actions">
+      <button id="openModalCancel">キャンセル</button>
+      <button id="openModalOk" class="primary">開く</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/web/app.js"></script>
 </body>
 </html>

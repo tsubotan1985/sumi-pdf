@@ -51,7 +51,8 @@
 2. 解凍して `SUMIPDF.exe` を実行（インストーラ不要・ポータブル）
 
 > OCRエンジン（tesseract）を有効化する場合: `winget install UB-Mannheim.TesseractOCR`
-> 辞書（jpn/jpn_vert/eng）は同梱済み。NDLOCR-Liteモデルは同梱ビルドに含まれます
+> 辞書（jpn/jpn_vert/eng）は同梱済み。NDLOCR-Liteモデルは同梱ビルドに含まれないため、
+> 利用する場合は `scripts/setup_third_party.sh` で別途取得してください
 
 ## MCPサーバ
 
@@ -88,7 +89,7 @@ PyInstallerでビルドする場合（pymupdfは含めない — MIT構成）:
 - 本体: **MIT**（`LICENSE`）
 - エンジン: pypdf (BSD-3) / pypdfium2 (Apache-2.0・BSD) / reportlab (BSD) / Pillow (MIT-CMU) — **AGPL成分なし**
 - フォント: IPAex（IPAフォントライセンス）/ Noto Sans CJK（OFL）/ Liberation（OFL）→ `fonts/LICENSES.md`
-- OCR: tesseract（Apache-2.0）＋ tessdata_fast / NDLOCR-Lite（国立国会図書館、CC-BY-4.0）
+- OCR: tesseract（Apache-2.0・外部インストール）＋ tessdata_fast（同梱）/ NDLOCR-Lite（国立国会図書館、CC-BY-4.0・**同梱しないオプション**: `scripts/setup_third_party.sh` で別途取得）
 
 詳細は `THIRD-PARTY-NOTICES.md`。MS/Yu/Meiryo 系フォントは同梱せずシステム参照のみ。
 

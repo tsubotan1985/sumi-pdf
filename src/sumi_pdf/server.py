@@ -7,10 +7,13 @@ handle kept -> other apps can save over the PDF anytime); the UI polls
 from __future__ import annotations
 
 import io
+import mimetypes
 import os
+import re
+import sys
 import tempfile
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -27,10 +30,55 @@ from .ocr import detect_engines, ocr_page
 
 app = FastAPI(title="SUMIPDF")
 S: dict = {"src": None, "work": None, "path": None, "dirty": False, "stat": None,
-           "n": 0, "pw": None}
+           "n": 0, "pw": None, "desktop": False}
 
-_WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "web")
+
+def _asset_root() -> str:
+    """Directory that holds ``web/`` and ``resources/``.
+
+    Frozen (PyInstaller): ``sys._MEIPASS`` -> the ``_internal`` bundle dir where
+    ``--add-data "web;web"`` / ``"resources;resources"`` place the assets.
+    Development: the repository root (three levels up from this file).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS  # type: ignore[attr-defined]
+    return os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+
+
+def _web_dir() -> str:
+    return os.path.join(_asset_root(), "web")
+
+
+def _resource_dir() -> str:
+    return os.path.join(_asset_root(), "resources")
+
+
+# Native (pywebview) file-dialog bridge, registered by the desktop shell.
+# Absent in the plain browser server -> the dialog endpoints answer 501.
+DIALOG_HANDLERS: dict = {}
+
+
+def register_dialogs(open_fn=None, save_fn=None, desktop: bool = True) -> None:
+    """Called by app.py once the pywebview window exists.
+
+    ``open_fn() -> path|None`` and ``save_fn(suggested=None) -> path|None`` are
+    plain callables that pop the native dialog (app.py marshals them onto the
+    GUI thread).
+    """
+    if open_fn is not None:
+        DIALOG_HANDLERS["open"] = open_fn
+    if save_fn is not None:
+        DIALOG_HANDLERS["save"] = save_fn
+    S["desktop"] = desktop
+
+
+def _dialog(kind: str):
+    fn = DIALOG_HANDLERS.get(kind)
+    if not S.get("desktop") or fn is None:
+        raise HTTPException(501, "native file dialog is unavailable in browser mode")
+    return fn
+
 
 
 def _disk_stat(path: str) -> dict:
@@ -110,10 +158,116 @@ class SaveReq(BaseModel):
 
 @app.get("/")
 def index():
-    p = os.path.join(_WEB, "index.html")
+    p = os.path.join(_web_dir(), "index.html")
     if os.path.isfile(p):
         return FileResponse(p)
     return Response("web/index.html missing (run from repo root)", status_code=404)
+
+
+@app.get("/assets/web/{filepath:path}")
+def web_asset(filepath: str):
+    """Serve files that resolve inside ``web/`` only (no traversal, no repo exposure)."""
+    root = os.path.realpath(_web_dir())
+    target = os.path.realpath(os.path.join(root, filepath))
+    try:
+        inside = os.path.commonpath([root, target]) == root
+    except ValueError:  # different drive letters on Windows
+        inside = False
+    if not inside or not os.path.isfile(target):
+        raise HTTPException(404, "not found")
+    mt, _ = mimetypes.guess_type(target)
+    return FileResponse(target, media_type=mt or "application/octet-stream")
+
+
+@app.get("/assets/icon.png")
+def ui_icon():
+    p = os.path.join(_resource_dir(), "icon-1024.png")
+    if not os.path.isfile(p):
+        raise HTTPException(404, "icon not found")
+    return FileResponse(p, media_type="image/png")
+
+
+class SaveDialogReq(BaseModel):
+    suggested: str | None = None
+
+
+@app.post("/api/dialog/open")
+def dialog_open():
+    fn = _dialog("open")
+    try:
+        path = fn()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"dialog failed: {e}")
+    return {"path": str(path) if path else None}
+
+
+@app.post("/api/dialog/save")
+def dialog_save(req: SaveDialogReq):
+    fn = _dialog("save")
+    try:
+        path = fn(suggested=req.suggested)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"dialog failed: {e}")
+    return {"path": str(path) if path else None}
+
+
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+_UPLOAD_DIR: str | None = None
+
+
+def _upload_dir() -> str:
+    global _UPLOAD_DIR
+    if _UPLOAD_DIR is None:
+        _UPLOAD_DIR = tempfile.mkdtemp(prefix="sumipdf-upload-")
+    return _UPLOAD_DIR
+
+
+def _safe_filename(filename: str) -> str:
+    """Basename-only, characters restricted, forced .pdf extension."""
+    name = os.path.basename((filename or "").replace("\\", "/")).strip()
+    name = re.sub(r"[^\w.\- ]", "_", name).strip(" .")
+    if not name:
+        name = "upload.pdf"
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    return name
+
+
+@app.post("/api/upload")
+async def upload_doc(request: Request, filename: str = "upload.pdf"):
+    """Open a PDF supplied as a raw request body as an in-memory temp file.
+
+    Invalid PDFs answer 400 and leave the currently open document untouched.
+    """
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "empty upload")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "file too large")
+    data = _load(body)  # validates; raises 400 before S is touched
+    base = _safe_filename(filename)
+    dest = os.path.join(_upload_dir(), base)
+    if os.path.exists(dest):
+        # Never clobber an in-flight upload: live-reload would fire on it.
+        stem, ext = os.path.splitext(base)
+        i = 1
+        while os.path.exists(os.path.join(_upload_dir(), f"{stem}-{i}{ext}")):
+            i += 1
+        dest = os.path.join(_upload_dir(), f"{stem}-{i}{ext}")
+    with open(dest, "wb") as fh:
+        fh.write(data)
+    S["src"] = S["work"] = data
+    S["path"], S["dirty"], S["pw"] = dest, False, None
+    S["stat"] = _disk_stat(dest)
+    S["n"] = P.page_count(data)
+    w, h = P.page_size(data, 0)
+    return {"path": dest, "pages": S["n"], "size": [round(w, 1), round(h, 1)],
+            "fonts": P.font_inventory(data), "stat": S["stat"], "uploaded": True}
+
 
 
 @app.post("/api/open")
@@ -223,8 +377,20 @@ def do_save(req: SaveReq):
         S["dirty"] = False
         S["stat"] = _disk_stat(out)
         return {"saved": out, "bytes": os.path.getsize(out), "stat": S["stat"]}
-    E.save_optimized(data, out)
-    return {"saved": out, "bytes": os.path.getsize(out), "stat": _disk_stat(out)}
+    # Save-as: the new file becomes the current document (dirty cleared, stat synced).
+    # Written via temp+replace like the in-place path so a failed save never
+    # leaves a partial file at the chosen destination.
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(out) or None)
+        os.close(fd)
+        E.save_optimized(data, tmp)
+        os.replace(tmp, out)
+    except OSError as e:
+        raise HTTPException(400, f"cannot save: {e}")
+    S["path"] = out
+    S["dirty"] = False
+    S["stat"] = _disk_stat(out)
+    return {"saved": out, "bytes": os.path.getsize(out), "stat": S["stat"]}
 
 
 @app.get("/api/fonts")
