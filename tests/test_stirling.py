@@ -86,14 +86,14 @@ def test_watermark_and_page_numbers(tmp_path):
     c.showPage()
     c.save()
     data = open(p, "rb").read()
-    wm = ST.watermark(data, 0, "CONFIDENTIAL")
+    wm = ST.watermark(data, 0, "CONFIDENTIAL", size=24)
     assert wm != data
     out = str(tmp_path / "num.pdf")
     r = ST.page_numbers(wm, out, start=5)
     assert r["pages"] == 1
-    # extract text: page number label present
+    # extract text: page number label present (Win cp932 console-safe)
     txt = P.extract_text(open(out, "rb").read(), 0)
-    assert "5 / 5" in txt and "CONFIDENTIAL" in txt
+    assert "5 / 5" in txt and "CONFIDENTIAL" in txt, repr(txt[:120])
 
 
 def test_metadata_roundtrip(tmp_path):

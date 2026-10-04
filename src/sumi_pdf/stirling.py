@@ -109,23 +109,18 @@ def watermark(data: bytes, pno: int, text: str, opacity: float = 0.15,
 def page_numbers(data: bytes, out_path: str, fmt: str = "{n} / {total}",
                  pos: str = "bottom-center", size: float = 10.0,
                  start: int = 1) -> dict:
-    """Stamp page numbers on every page."""
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
+    """Stamp page numbers on every page (standard font — no embedding)."""
     from reportlab.pdfgen import canvas as rl_canvas
 
-    from . import fonts as F
     n_pages = P.page_count(data)
     r = PdfReader(io.BytesIO(data))
     w = PdfWriter()
     w.append(r)
-    if "SumiGothic" not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont("SumiGothic", F.bundled_path("ipaexg.ttf")))
     for i in range(n_pages):
         pw, ph = P.page_size(data, i)
         buf = io.BytesIO()
         c = rl_canvas.Canvas(buf, pagesize=(pw, ph))
-        c.setFont("SumiGothic", size)
+        c.setFont("Helvetica", size)
         c.setFillColorRGB(0.2, 0.2, 0.2)
         label = fmt.format(n=i + start, total=n_pages + start - 1)
         if pos == "bottom-center":
