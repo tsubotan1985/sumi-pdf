@@ -8,3 +8,7 @@ build/
 tmp/
 .pytest_cache/
 third_party/
+src/sumi_pdf.egg-info/
+build/
+dist/
+.venv/
