@@ -58,6 +58,11 @@
 1. [Releases](https://github.com/tsubotan1985/sumi-pdf/releases/latest) から `SUMIPDF-vX.Y.Z-win64.zip` をダウンロード
 2. 解凍して `SUMIPDF.exe` を実行（インストーラ不要・ポータブル）
 
+> **必要環境**: .NET Framework 4.7.2以上 と WebView2 Runtime（Windows 10 1809以降・11は標準搭載）。
+> LTSCや仮想マシンなどで入っていない場合は起動時に案内が表示されます。
+> 「Failed to resolve Python.Runtime.Loader.Initialize」エラーが出る環境は
+> .NET Framework 4.8 ランタイム（https://dotnet.microsoft.com/download/dotnet-framework/net48 ）の導入で解消します。
+
 > OCRエンジン（tesseract）を有効化する場合: `winget install UB-Mannheim.TesseractOCR`
 > 辞書（jpn/jpn_vert/eng）は同梱済み。NDLOCR-Liteモデルは同梱ビルドに含まれないため、
 > 利用する場合は `scripts/setup_third_party.sh` で別途取得してください

@@ -69,9 +69,71 @@ def _native_dialog(window, dialog_type, **kwargs):
     return _do()
 
 
+def _check_prerequisites() -> str | None:
+    """Return a human-readable reason if the GUI prerequisites are missing.
+
+    The frozen app needs (1) .NET Framework 4.7.2+ for pythonnet/clr (pywebview
+    WinForms backend) and (2) the WebView2 runtime for the browser control.
+    Both ship with Windows 10 1809+ / 11 by default, but stripped-down builds
+    (LTSC, VMs, Server without Desktop Experience) may lack them — and the raw
+    ``Failed to resolve Python.Runtime.Loader.Initialize`` traceback gives no
+    hint. Fail early with an actionable message instead.
+    """
+    if os.name != "nt":
+        return None
+    msgs = []
+    try:
+        import _winreg as winreg  # type: ignore[import-not-found]
+    except ImportError:  # PyInstaller bundles _winreg as winreg
+        import winreg  # type: ignore[no-redef]
+
+    # .NET Framework 4.x full install is registered under this key.
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full") as k:
+            release = winreg.QueryValueEx(k, "Release")[0]
+            if release < 461808:  # 4.7.2
+                msgs.append(
+                    ".NET Framework 4.7.2以上が見つかりません（Release=%d）。"
+                    "「.NET Framework 4.8 ランタイム」をインストールしてください。" % release)
+    except OSError:
+        msgs.append(
+            ".NET Framework 4.x が見つかりません。"
+            "「.NET Framework 4.8 ランタイム」をインストールしてください。")
+
+    # WebView2 runtime (Evergreen) — pywebview needs it for the browser control.
+    for sub in (r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+                r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, sub):
+                break
+        except OSError:
+            continue
+    else:
+        msgs.append(
+            "Microsoft Edge WebView2 ランタイムが見つかりません。"
+            "「WebView2 Runtime (Evergreen)」をインストールしてください。")
+
+    return "\n\n".join(msgs) if msgs else None
+
+
+def _fatal_dialog(text: str) -> None:
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, "SUMIPDF 起動エラー", 0x10)
+    except Exception:
+        print(text)
+
+
 def main():
     import uvicorn
     import webview
+
+    missing = _check_prerequisites()
+    if missing:
+        _fatal_dialog(missing + "\n\nインストール後に再度 SUMIPDF.exe を起動してください。")
+        return
 
     from . import server as sv
     from .server import app
