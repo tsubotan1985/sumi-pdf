@@ -27,15 +27,23 @@
 
 一般的な「黒塗りPDF」は**黒い矩形を上に乗せているだけ**で、下のテキストや画像はファイルに残ります。SUMIPDFの墨消しは**コンテンツストリームからテキスト命令を削除し、埋め込み画像の画素そのものを書き換える**ため、データが物理的に消えます。
 
-| | 黒塗り（一般的なツール） | SUMIPDF |
+|  | 黒塗り（一般的なツール） | SUMIPDF |
 |---|---|---|
 | テキスト | 残る（コピー・検索で復元可） | **削除** |
 | 画像内の個人情報 | 残る | **画素を書き換え** |
 | 復元 | 容易 | **不可能** |
+| 失敗時 | 半分だけ適用される恐れ | **原子的（全体取消し）** |
+
+## UI
+
+上部にファイル操作とundo/redo、用途別タブ（墨消し／文字置換／ページ／OCR／AI要約／書き出し）、左にページサムネイル、中央にPDF、右にそのタブの設定のみを表示。960×640で横スクロールなし。選択範囲はズーム・リサイズに追従し、処理中はページ移動を無効化して誤操作を防ぐ。
 
 ## 機能
 
-- **真の墨消し** — テキストはコンテンツストリームの表示命令を削除、画像はピクセルを直接書き換え（`/api/img-redact`）。背景色でのなじませ塗り・残文字の座標復元付き
+- **真の墨消し** — テキストはコンテンツストリームの表示命令を削除、画像はピクセルを直接書き換え。**文字＋画像を1リクエストで原子的に処理**（失敗時は全体を取り消し）。背景色でのなじませ塗り・残文字の座標復元付き。**回転/CropBox付きページは誤消去防止のため自動中止**
+- **検索して墨消し** — 検索語で候補一覧（ページ＋前後文脈）を出し、チェックした候補を一括墨消し
+- **undo/redo** — 全編集操作を20ステップまで履歴（Ctrl+Z / Ctrl+Y）。誤墨消しも即座に復元
+- **AI要約** — ユーザー指定のOpenAI互換エンドポイント（ローカルLLM可）で全ページ／現在ページ／範囲／**選択範囲**を要約。APIキーはローカル保存（リポジトリ外）
 - **文字置換** — 同一ベースラインにIPAexで再挿入。行の部分置換では前後の文字を1文字ずつ再構築
 - **OCR** — NDLOCR-Lite（縦書き・手書き・古典）＋ tesseract（jpn/jpn_vert 自動判定）。スキャンPDFを検索可能化（不可視テキスト層）
 - **暗号化** — AES-256/128 パスワード設定・解除・権限制御（印刷/コピー等のフラグ）
@@ -66,7 +74,7 @@ hermes mcp add sumi-pdf -- python -m sumi_pdf.mcp_server
 
 ## HTTP API（127.0.0.1:8765）
 
-`/api/open` `/api/page/{n}` `/api/redact` `/api/img-redact` `/api/replace` `/api/save` `/api/ocr/{n}` `/api/ocr-layer` `/api/encrypt` `/api/decrypt` `/api/compress` `/api/watermark` `/api/page-numbers` `/api/metadata` `/api/sanitize` `/api/rotate` `/api/pages/delete` `/api/extract` `/api/merge` `/api/insert` `/api/split` ほか
+`/api/open` `/api/page/{n}` `/api/redact`（img:true で原子的文字+画像） `/api/img-redact` `/api/find` `/api/redact-bulk` `/api/undo` `/api/redo` `/api/replace` `/api/save` `/api/ocr/{n}` `/api/ocr-layer` `/api/ai/config` `/api/ai/summarize` `/api/encrypt` `/api/decrypt` `/api/compress` `/api/watermark` `/api/page-numbers` `/api/metadata` `/api/sanitize` `/api/pages/rotate` `/api/pages/delete` `/api/extract` `/api/merge` `/api/insert` `/api/split` ほか
 
 ## ソースから実行 / ビルド
 

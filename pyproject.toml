@@ -1,6 +1,6 @@
 [project]
 name = "sumi-pdf"
-version = "0.5.0"
+version = "0.7.2"
 description = "SUMIPDF - local-first PDF redaction / text-edit / OCR / crypto toolkit with MCP server (MIT)"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
