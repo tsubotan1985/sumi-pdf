@@ -114,6 +114,7 @@
       <!-- 墨消し -->
       <div class="panel" data-panel="redact">
         <h3><svg style="width:15px;height:15px"><use href="#i-redact"/></svg>墨消し設定</h3>
+        <p class="panel-desc">このタブでできること：ドラッグ範囲・検索語に一致する文字や画像をデータごと消します。</p>
         <div class="field">
           <label for="redactTarget">対象</label>
           <select id="redactTarget">
@@ -156,7 +157,8 @@
 
       <!-- 文字置換 -->
       <div class="panel" data-panel="replace" hidden>
-        <h3><svg style="width:15px;height:15px"><use href="#i-replace"/></svg>文字置換</h3>
+        <h3><svg style="width:15px;height:15px"><use href="#i-replace"/></svg>このページの文字を置換</h3>
+        <p class="panel-desc">このタブでできること：このページ内の文字列を別の文字列へ置き換えます。</p>
         <div class="field">
           <label for="replaceFind">検索する文字列</label>
           <input type="text" id="replaceFind" placeholder="このページ内の文字列">
@@ -175,6 +177,7 @@
       <!-- ページ -->
       <div class="panel" data-panel="page" hidden>
         <h3><svg style="width:15px;height:15px"><use href="#i-page"/></svg>ページ操作</h3>
+        <p class="panel-desc">このタブでできること：ページの回転・削除・PDF追加・抽出／分割を行います。</p>
         <div class="field">
           <label>回転</label>
           <div class="row">
@@ -206,6 +209,8 @@
       <!-- OCR -->
       <div class="panel" data-panel="ocr" hidden>
         <h3><svg style="width:15px;height:15px"><use href="#i-ocr"/></svg>OCR</h3>
+        <p class="panel-desc">このタブでできること：このページの文字をOCRで読み取り、検索可能なテキスト層を追加します。</p>
+        <p class="note">OCRエンジン: tesseract（NDLOCRは別途セットアップ時のみ）</p>
         <div class="field">
           <label for="ocrLang">言語</label>
           <select id="ocrLang">
@@ -226,6 +231,7 @@
       <!-- AI要約 -->
       <div class="panel" data-panel="ai" hidden>
         <h3><svg style="width:15px;height:15px"><use href="#i-ai"/></svg>AI要約</h3>
+        <p class="panel-desc">このタブでできること：PDFのテキストをOpenAI互換エンドポイントへ送り、要約を作成します。</p>
         <div class="field">
           <label for="aiBaseURL">エンドポイント (base_url)</label>
           <input type="text" id="aiBaseURL" placeholder="https://api.openai.com/v1 などOpenAI互換">
@@ -268,56 +274,75 @@
       <!-- 書き出し -->
       <div class="panel" data-panel="export" hidden>
         <h3><svg style="width:15px;height:15px"><use href="#i-export"/></svg>書き出し</h3>
-        <div class="field">
-          <label>圧縮（品質は自動・スライダーなし）</label>
-          <button id="btnCompress" data-busy data-needs-doc>圧縮して別名保存</button>
-        </div>
-        <div class="field">
-          <label for="wmText">透かし文字</label>
-          <input type="text" id="wmText" placeholder="CONFIDENTIAL">
-          <div class="row" style="margin-top:6px">
-            <button id="btnWatermark" data-busy data-needs-doc>透かしを追加</button>
+        <p class="panel-desc">このタブでできること：圧縮保存、透かし・ページ番号の追加、暗号化と解除、文書情報の確認・削除。</p>
+        <details class="group" open>
+          <summary>圧縮</summary>
+          <div class="group-body">
+            <div class="field">
+              <label>圧縮（品質は自動・スライダーなし）</label>
+              <button id="btnCompress" data-busy data-needs-doc>圧縮して別名保存</button>
+            </div>
           </div>
-        </div>
-        <div class="field">
-          <label>ページ番号</label>
-          <button id="btnPageNumbers" data-busy data-needs-doc>ページ番号を付与</button>
-        </div>
-        <h3 style="margin-top:16px">暗号化 / 解除</h3>
-        <div class="field">
-          <label for="encUser">パスワード</label>
-          <input type="password" id="encUser" autocomplete="new-password">
-        </div>
-        <div class="field">
-          <label for="encUser2">パスワード（確認）</label>
-          <input type="password" id="encUser2" autocomplete="new-password">
-        </div>
-        <div class="field">
-          <label>許可</label>
-          <label class="check"><input type="checkbox" id="encPrint" checked> 印刷</label>
-          <label class="check"><input type="checkbox" id="encCopy" checked> コピー</label>
-          <label class="check"><input type="checkbox" id="encModify"> 編集</label>
-          <label class="check"><input type="checkbox" id="encAnnotate" checked> 注釈</label>
-          <label class="check"><input type="checkbox" id="encForms" checked> フォーム入力</label>
-          <label class="check"><input type="checkbox" id="encAssemble"> ページ挿入/削除</label>
-          <label class="check"><input type="checkbox" id="encPrintHigh"> 高解像度印刷</label>
-        </div>
-        <button id="btnEncrypt" class="primary" data-busy data-needs-doc>暗号化して保存（AES-256）</button>
-        <div class="field" style="margin-top:12px">
-          <label for="decPw">解除パスワード</label>
-          <input type="password" id="decPw" autocomplete="off">
-          <div class="row" style="margin-top:6px">
-            <button id="btnDecrypt" data-busy data-needs-doc>暗号化を解除して保存</button>
+        </details>
+        <details class="group">
+          <summary>透かし・ページ番号</summary>
+          <div class="group-body">
+            <div class="field">
+              <label for="wmText">透かし文字</label>
+              <input type="text" id="wmText" placeholder="CONFIDENTIAL">
+              <div class="row" style="margin-top:6px">
+                <button id="btnWatermark" data-busy data-needs-doc>透かしを追加</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>ページ番号</label>
+              <button id="btnPageNumbers" data-busy data-needs-doc>ページ番号を付与</button>
+            </div>
           </div>
-        </div>
-        <h3 style="margin-top:16px">文書情報</h3>
-        <div class="row">
-          <button id="btnMetaGet" data-busy>文書情報を取得</button>
-        </div>
-        <div class="result" id="metaOut"></div>
-        <h3 style="margin-top:16px">文書情報の削除（JS/添付/メタ）</h3>
-        <button id="btnSanitize" data-busy data-needs-doc>文書情報の削除</button>
-        <p class="note">埋め込まれた JavaScript・添付ファイル・文書メタデータ・注釈・リンクを除去した<b>複製</b>を作成します。<b>本文中の文字として書かれた個人情報は消えません</b>（それには墨消しを使ってください）。</p>
+        </details>
+        <details class="group">
+          <summary>暗号化・解除</summary>
+          <div class="group-body">
+            <div class="field">
+              <label for="encUser">パスワード</label>
+              <input type="password" id="encUser" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label for="encUser2">パスワード（確認）</label>
+              <input type="password" id="encUser2" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label>許可</label>
+              <label class="check"><input type="checkbox" id="encPrint" checked> 印刷</label>
+              <label class="check"><input type="checkbox" id="encCopy" checked> コピー</label>
+              <label class="check"><input type="checkbox" id="encModify"> 編集</label>
+              <label class="check"><input type="checkbox" id="encAnnotate" checked> 注釈</label>
+              <label class="check"><input type="checkbox" id="encForms" checked> フォーム入力</label>
+              <label class="check"><input type="checkbox" id="encAssemble"> ページ挿入/削除</label>
+              <label class="check"><input type="checkbox" id="encPrintHigh"> 高解像度印刷</label>
+            </div>
+            <button id="btnEncrypt" class="primary" data-busy data-needs-doc>暗号化して保存（AES-256）</button>
+            <div class="field" style="margin-top:12px">
+              <label for="decPw">解除パスワード</label>
+              <input type="password" id="decPw" autocomplete="off">
+              <div class="row" style="margin-top:6px">
+                <button id="btnDecrypt" data-busy data-needs-doc>暗号化を解除して保存</button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="group">
+          <summary>文書情報</summary>
+          <div class="group-body">
+            <div class="row">
+              <button id="btnMetaGet" data-busy>文書情報を取得</button>
+            </div>
+            <div class="result" id="metaOut"></div>
+            <h3 class="sub">文書情報の削除（JS/添付/メタ）</h3>
+            <button id="btnSanitize" data-busy data-needs-doc>文書情報の削除</button>
+            <p class="note">埋め込まれた JavaScript・添付ファイル・文書メタデータ・注釈・リンクを除去した<b>複製</b>を作成します。<b>本文中の文字として書かれた個人情報は消えません</b>（それには墨消しを使ってください）。</p>
+          </div>
+        </details>
       </div>
 
       <!-- 表示設定 -->
@@ -366,6 +391,15 @@
       <button id="openModalCancel">キャンセル</button>
       <button id="openModalOk" class="primary">開く</button>
     </div>
+  </div>
+</div>
+
+<!-- ============ confirm dialog (discard guard 3-choice / generic confirm) ============ -->
+<div class="modal-bg" id="confirmModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" style="width:380px">
+    <h2 id="confirmTitle">確認</h2>
+    <p class="note" id="confirmText" style="white-space:pre-line"></p>
+    <div class="actions" id="confirmActions" style="flex-wrap:wrap"></div>
   </div>
 </div>
 

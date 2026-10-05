@@ -132,6 +132,44 @@ def _tmpfile() -> str:
     return p
 
 
+def _pages_meta(data: bytes) -> list[dict]:
+    """Per-page native /Rotate and CropBox origin (pypdf) for the UI guard.
+
+    crop falls back to MediaBox when no /CropBox exists, so a nonzero
+    MediaBox origin is caught too. Never raises: parse trouble -> [].
+    """
+    try:
+        r = PdfReader(io.BytesIO(data))
+        out = []
+        for pg in r.pages:
+            try:
+                rot = int(pg.rotation) % 360
+            except Exception:
+                rot = 0
+            try:
+                ll = pg.cropbox.lower_left
+                x0, y0 = float(ll[0]), float(ll[1])
+            except Exception:
+                x0 = y0 = 0.0
+            out.append({"rot": rot, "crop_x0": x0, "crop_y0": y0})
+        return out
+    except Exception:
+        return []
+
+
+GUARD_MSG = "回転/CropBox設定があるページは誤消去防止のため中止"
+
+
+def _page_guard_reason(data: bytes, pno: int) -> str | None:
+    """誤消去防止: native /Rotate≠0・CropBox原点≠0 のページは文字座標がずれる。"""
+    meta = _pages_meta(data)
+    if 0 <= pno < len(meta):
+        m = meta[pno]
+        if m["rot"] % 360 != 0 or abs(m["crop_x0"]) > 1e-6 or abs(m["crop_y0"]) > 1e-6:
+            return GUARD_MSG
+    return None
+
+
 # ---------------- undo / redo history ----------------
 # Every destructive edit snapshots S["work"] (plus page count / dirty) right
 # before overwriting it. Caps keep big documents from eating memory: at most
@@ -204,7 +242,8 @@ def _time_travel(source: list[dict], sink: list[dict], empty: str, page: int) ->
         w = h = 0
     return {"undone": True, "pages": S["n"],
             "page": max(0, min(page, S["n"] - 1)),
-            "size": [round(w, 1), round(h, 1)], "dirty": S["dirty"]}
+            "size": [round(w, 1), round(h, 1)], "dirty": S["dirty"],
+            "pages_meta": _pages_meta(S["work"])}
 
 
 @app.post("/api/undo")
@@ -229,6 +268,8 @@ class RedactReq(BaseModel):
     rects: list[list[float]]
     match_bg: bool = True
     fill: list[float] = [1.0, 1.0, 1.0]
+    img: bool = False                     # true: 文字+画像を同一リクエストで適用
+    img_fill: list[int] = [255, 255, 255]
 
 
 class ReplaceReq(BaseModel):
@@ -354,7 +395,8 @@ async def upload_doc(request: Request, filename: str = "upload.pdf"):
     _clear_history()
     w, h = P.page_size(data, 0)
     return {"path": dest, "pages": S["n"], "size": [round(w, 1), round(h, 1)],
-            "fonts": P.font_inventory(data), "stat": S["stat"], "uploaded": True}
+            "fonts": P.font_inventory(data), "stat": S["stat"], "uploaded": True,
+            "pages_meta": _pages_meta(data)}
 
 
 
@@ -373,7 +415,8 @@ def open_pdf(req: OpenReq):
     _clear_history()
     w, h = P.page_size(data, 0)
     return {"path": path, "pages": S["n"], "size": [round(w, 1), round(h, 1)],
-            "fonts": P.font_inventory(data), "stat": S["stat"]}
+            "fonts": P.font_inventory(data), "stat": S["stat"],
+            "pages_meta": _pages_meta(data)}
 
 
 @app.get("/api/fileinfo")
@@ -408,7 +451,8 @@ def reload_doc(req: ReloadReq):
     S["n"] = n
     S["stat"] = _disk_stat(S["path"])
     _clear_history()
-    return {"pages": n, "page": page, "stat": S["stat"]}
+    return {"pages": n, "page": page, "stat": S["stat"],
+            "pages_meta": _pages_meta(data)}
 
 
 @app.get("/api/page/{pno}")
@@ -436,12 +480,33 @@ def do_redact(req: RedactReq):
     data = _require()
     if not 0 <= req.page < S["n"]:
         raise HTTPException(404, "page out of range")
+    guard = _page_guard_reason(data, req.page)
+    if guard:
+        raise HTTPException(400, guard)
     rects = [tuple(r) for r in req.rects]
-    out = R.redact(data, req.page, rects, match_bg=req.match_bg,
-                   fill=tuple(req.fill))
+    # Both steps run on local bytes; S is assigned only after EVERYTHING
+    # succeeded, so an image-side failure leaves the work document untouched
+    # (atomic: one request applies text+image or nothing).
+    try:
+        out = R.redact(data, req.page, rects, match_bg=req.match_bg,
+                       fill=tuple(req.fill))
+        applied: dict = {"dropped": out["dropped"], "filled": out["filled"]}
+        new_work = out["bytes"]
+        if req.img:
+            from . import imgredact as IR
+            ir = IR.remove_pixels(out["bytes"], req.page, rects,
+                                  fill=tuple(req.img_fill))
+            applied["img_edited"] = ir.get("edited", [])
+            applied["img_rects"] = ir.get("rects", 0)
+            if ir.get("bytes"):
+                new_work = ir["bytes"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"墨消しに失敗しました（workは変更していません）: {e}")
     _push_history()
-    S["work"], S["dirty"] = out["bytes"], True
-    return {"applied": {"dropped": out["dropped"], "filled": out["filled"]}}
+    S["work"], S["dirty"] = new_work, True
+    return {"applied": applied}
 
 
 @app.post("/api/replace")
@@ -466,6 +531,28 @@ def _is_upload_doc(path: str | None) -> bool:
     return parent.startswith("sumipdf-upload-")
 
 
+def _save_via_tmp(data: bytes, out: str) -> None:
+    """Write via temp file then atomically replace `out` (shared by do_save).
+
+    Both save branches behave identically on failure: the tmp file is swept
+    and the caller sees HTTP 400 with a detail — never a half-written
+    destination or debris left next to it.
+    """
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(out) or None)
+        os.close(fd)
+        E.save_optimized(data, tmp)
+        os.replace(tmp, out)
+    except OSError as e:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass  # best-effort sweep; surfacing the 400 matters more
+        raise HTTPException(400, f"cannot save: {e}")
+
+
 @app.post("/api/save")
 def do_save(req: SaveReq):
     data = _require()
@@ -487,24 +574,16 @@ def do_save(req: SaveReq):
         else:
             raise HTTPException(400, "別名保存してください")
     if out == S["path"]:
-        # atomic-ish: write temp then replace (keeps no-lock guarantee)
-        fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(out) or None)
-        os.close(fd)
-        E.save_optimized(data, tmp)
-        os.replace(tmp, out)
+        # atomic-ish: write temp then replace (keeps no-lock guarantee).
+        # Same failure contract as the save-as branch: tmp swept, 400 detail.
+        _save_via_tmp(data, out)
         S["dirty"] = False
         S["stat"] = _disk_stat(out)
         return {"saved": out, "bytes": os.path.getsize(out), "stat": S["stat"]}
     # Save-as: the new file becomes the current document (dirty cleared, stat synced).
     # Written via temp+replace like the in-place path so a failed save never
     # leaves a partial file at the chosen destination.
-    try:
-        fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(out) or None)
-        os.close(fd)
-        E.save_optimized(data, tmp)
-        os.replace(tmp, out)
-    except OSError as e:
-        raise HTTPException(400, f"cannot save: {e}")
+    _save_via_tmp(data, out)
     S["path"] = out
     S["dirty"] = False
     S["stat"] = _disk_stat(out)
@@ -619,7 +698,7 @@ def pages_delete(req: PagesReq):
     S["work"] = PG.delete_pages(data, req.pnos)
     S["n"] = P.page_count(S["work"])
     S["dirty"] = True
-    return {"pages": S["n"]}
+    return {"pages": S["n"], "pages_meta": _pages_meta(S["work"])}
 
 
 @app.post("/api/pages/extract")
@@ -646,7 +725,7 @@ def pages_insert(req: InsertReq):
     S["work"] = PG.insert_pdf(data, req.path, req.at)
     S["n"] = P.page_count(S["work"])
     S["dirty"] = True
-    return {"pages": S["n"]}
+    return {"pages": S["n"], "pages_meta": _pages_meta(S["work"])}
 
 
 class MergeReq(BaseModel):

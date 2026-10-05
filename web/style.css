@@ -7,8 +7,8 @@
   --panel-3: #3a3f47;
   --line: #424852;
   --fg: #e9eaec;
-  --muted: #9aa1ab;
-  --muted-2: #767d87;
+  --muted: #aab1bb;
+  --muted-2: #868d97;
   --acc: #c0342b;
   --acc-hi: #d84136;
   --view-bg: #1b1d21;
@@ -369,3 +369,45 @@ select {
 /* AI summarize (Task 10): reuses .field/.row/.result/.note tones */
 #aiOut { white-space: pre-wrap; max-height: 240px; overflow: auto; }
 .ai-notice { color: var(--warn); border-left: 3px solid var(--warn); padding-left: 8px; }
+
+/* ---------------- Task 7: tab intro line & export groups ---------------- */
+.panel-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+.panel details.group + details.group { border-top: 1px solid var(--line); }
+.panel details.group > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.panel details.group > summary::-webkit-details-marker { display: none; }
+.panel details.group > summary::after {
+  content: "";
+  flex: none;
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);            /* closed: chevron down */
+  transition: transform .12s ease;
+}
+.panel details.group[open] > summary::after { transform: rotate(225deg); } /* open: chevron up */
+.panel details.group .group-body { padding: 0 0 14px; }
+.panel h3.sub {
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: none;
+  padding-bottom: 0;
+  margin: 14px 0 6px;
+}

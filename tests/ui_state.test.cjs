@@ -120,12 +120,6 @@ test('replaceSummary omits the (never returned) font field', () => {
   assert.equal(/font/i.test(s), false);
 });
 
-test('redactPipeline picks the right server calls for each target', () => {
-  assert.deepEqual(app.redactPipeline('text_image'), ['redact', 'img-redact']);
-  assert.deepEqual(app.redactPipeline('text'), ['redact']);
-  assert.deepEqual(app.redactPipeline('image'), ['img-redact']);
-});
-
 test('redactFill converts UI colors to float RGB (text) and int RGB (image)', () => {
   assert.deepEqual(app.redactFill('black').redact, [0, 0, 0]);
   assert.deepEqual(app.redactFill('black').image, [0, 0, 0]);
@@ -183,18 +177,77 @@ test('pdfRectToView refuses an unusable scale like viewRectToPdf', () => {
 
 /* ---------- Task 2: one pinned page for the whole redact pipeline ---------- */
 
-test('redactCallSpecs pins a single page across every API call (bug B regression)', () => {
+/* ---------- Task 6: text+image = ONE atomic request; native rot/crop guard ---------- */
+
+test('redactCallSpecs sends text_image as a single img:true request (atomic)', () => {
   const fill = app.redactFill('white');
   const calls = app.redactCallSpecs(0, [1, 2, 3, 4], 'text_image', fill);
-  assert.deepEqual(calls.map((c) => c.path), ['/api/redact', '/api/img-redact']);
-  assert.deepEqual(calls.map((c) => c.body.page), [0, 0]); // both APIs hit page 0
+  assert.deepEqual(calls.map((c) => c.path), ['/api/redact']);   // 1 request, not 2
+  assert.equal(calls[0].body.page, 0);                            // still pinned
   assert.deepEqual(calls[0].body.rects, [[1, 2, 3, 4]]);
   assert.deepEqual(calls[0].body.fill, fill.redact);
   assert.equal(calls[0].body.match_bg, fill.matchBg);
-  assert.deepEqual(calls[1].body.fill, fill.image);
-  // single-op pipelines keep exactly one call, on the same pinned page
+  assert.equal(calls[0].body.img, true);                          // image side rides along
+  assert.deepEqual(calls[0].body.img_fill, fill.image);
+  // single-op targets keep their dedicated endpoints, one pinned call each
   assert.deepEqual(app.redactCallSpecs(3, [0, 0, 5, 5], 'text', fill).map((c) => [c.path, c.body.page]),
     [['/api/redact', 3]]);
+  assert.equal(app.redactCallSpecs(3, [0, 0, 5, 5], 'text', fill)[0].body.img, undefined);
   assert.deepEqual(app.redactCallSpecs(7, [0, 0, 5, 5], 'image', fill).map((c) => [c.path, c.body.page]),
     [['/api/img-redact', 7]]);
+});
+
+test('pageGuardBlock: UI rotation, native /Rotate and CropBox origin all block', () => {
+  const GUARD = '回転/CropBox設定があるページは誤消去防止のため中止';
+  assert.equal(app.pageGuardBlock(0, { 0: 90 }, []), true);            // UI-tracked rotation
+  assert.equal(app.pageGuardBlock(0, {}, [{ rot: 90, crop_x0: 0, crop_y0: 0 }]), true); // native /Rotate
+  assert.equal(app.pageGuardBlock(0, {}, [{ rot: 0, crop_x0: 30, crop_y0: 0 }]), true); // CropBox x-origin
+  assert.equal(app.pageGuardBlock(0, {}, [{ rot: 0, crop_x0: 0, crop_y0: 20 }]), true); // CropBox y-origin
+  assert.equal(app.pageGuardBlock(1, { 2: 90 }, []), false);           // other page rotated: no block
+  assert.equal(app.pageGuardBlock(0, {}, [{ rot: 0, crop_x0: 0, crop_y0: 0 }]), false);
+  assert.equal(app.pageGuardBlock(5, {}, []), false);                  // no meta: legacy behaviour
+  assert.equal(app.pageGuardBlock(0, {}, [{ rot: 360, crop_x0: 0, crop_y0: 0 }]), false); // 360 == 0
+  assert.ok(GUARD.length > 0); // message contract lives in app.js execRedact
+});
+
+test('remapRotAfterDelete shifts rotations after the deleted page', () => {
+  assert.deepEqual(app.remapRotAfterDelete({ 2: 90, 0: 180 }, 1), { 1: 90, 0: 180 });
+  assert.deepEqual(app.remapRotAfterDelete({ 2: 90 }, 2), {});         // deleted page's rot dropped
+  assert.deepEqual(app.remapRotAfterDelete({}, 0), {});
+});
+
+test('remapRotAfterInsert shifts rotations from the insert point on', () => {
+  assert.deepEqual(app.remapRotAfterInsert({ 1: 90 }, 1, 3), { 4: 90 });
+  assert.deepEqual(app.remapRotAfterInsert({ 1: 90 }, null, 3), { 1: 90 }); // append: unchanged
+});
+
+/* ---------- Task 8/9: DOM confirm dialog replaces window.confirm ---------- */
+
+test('discardChoices offers the 3-way guard: abort / discard / save', () => {
+  const btns = app.discardChoices('別の文書を開く');
+  assert.deepEqual(btns.map((b) => b.id), ['abort', 'discard', 'save']);
+  assert.equal(btns[0].label, '中止');
+  assert.equal(btns[1].label, '破棄して別の文書を開く');
+  assert.equal(btns[2].label, '保存してから別の文書を開く');
+  assert.equal(btns[2].primary, true);          // saving is the safe default
+});
+
+test('discardProceeds: follow-up runs on discard, or only after a successful save', () => {
+  assert.equal(app.discardProceeds('discard', false), true);
+  assert.equal(app.discardProceeds('save', true), true);
+  assert.equal(app.discardProceeds('save', false), false);  // failed save aborts the follow-up
+  assert.equal(app.discardProceeds('abort', true), false);  // 中止 never proceeds
+  assert.equal(app.discardProceeds(null, true), false);     // Escape / backdrop = 中止
+  assert.equal(app.discardProceeds(undefined, true), false);
+});
+
+test('no window.confirm remains; index.html hosts the DOM dialog and OCR engine line', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+  assert.equal(src.includes('window.confirm'), false, 'window.confirm is unavailable in WebView2');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.ok(html.includes('id="confirmModal"'), 'index.html must host the DOM confirm dialog');
+  assert.ok(html.includes('OCRエンジン: tesseract'), 'OCR panel must name the engine in use');
+  assert.ok(html.includes('このページの文字を置換'), 'replace panel heading must say page-scoped');
 });

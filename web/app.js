@@ -126,12 +126,6 @@ function replaceSummary(j) {
   return (j.replaced || 0) + '件置換（対象外 ' + (j.dropped || 0) + '）';
 }
 
-function redactPipeline(target) {
-  if (target === 'text') return ['redact'];
-  if (target === 'image') return ['img-redact'];
-  return ['redact', 'img-redact'];
-}
-
 function redactFill(kind) {
   if (kind === 'black') return { redact: [0, 0, 0], image: [0, 0, 0], matchBg: false };
   if (kind === 'background') return { redact: [1, 1, 1], image: [255, 255, 255], matchBg: true };
@@ -140,23 +134,72 @@ function redactFill(kind) {
 
 // Every API call of one redact run is built here from ONE pinned page number,
 // so a page switch mid-pipeline can never send the calls to different pages.
+// text_image goes as ONE /api/redact request with img:true — the server applies
+// text then image on the same work bytes or nothing at all (atomic, Task 6).
 function redactCallSpecs(pno, rect, target, fill) {
-  const ops = redactPipeline(target);
-  const calls = [];
-  if (ops.indexOf('redact') >= 0) {
-    calls.push({ kind: 'redact', path: '/api/redact', body: { page: pno, rects: [rect], match_bg: fill.matchBg, fill: fill.redact } });
+  if (target === 'image') {
+    return [{ kind: 'image', path: '/api/img-redact', body: { page: pno, rects: [rect], fill: fill.image } }];
   }
-  if (ops.indexOf('img-redact') >= 0) {
-    calls.push({ kind: 'image', path: '/api/img-redact', body: { page: pno, rects: [rect], fill: fill.image } });
-  }
-  return calls;
+  const body = { page: pno, rects: [rect], match_bg: fill.matchBg, fill: fill.redact };
+  if (target !== 'text') { body.img = true; body.img_fill = fill.image; }
+  return [{ kind: target === 'text' ? 'redact' : 'both', path: '/api/redact', body }];
+}
+
+// Task 6 guard: redaction coordinates are unsafe not only after in-session
+// rotation (state.rot) but also on pages with native /Rotate or a CropBox whose
+// origin is not (0,0) — the visible origin differs from edit.py's assumptions.
+function pageGuardBlock(pno, rotMap, pagesMeta) {
+  if (((rotMap && rotMap[pno]) || 0) % 360 !== 0) return true;
+  const m = (pagesMeta || [])[pno];
+  if (!m) return false;
+  if ((+m.rot || 0) % 360 !== 0) return true;
+  return Math.abs(+m.crop_x0 || 0) > 1e-6 || Math.abs(+m.crop_y0 || 0) > 1e-6;
+}
+
+// Task 6: keep state.rot page numbers aligned after structural page changes
+// (delete shifts later pages down, insert pushes them up).
+function remapRotAfterDelete(rotMap, deletedPno) {
+  const out = {};
+  Object.keys(rotMap || {}).forEach((k) => {
+    const i = +k;
+    if (i === deletedPno) return;
+    out[i > deletedPno ? i - 1 : i] = rotMap[k];
+  });
+  return out;
+}
+function remapRotAfterInsert(rotMap, at, count) {
+  const out = {};
+  Object.keys(rotMap || {}).forEach((k) => {
+    const i = +k;
+    out[(at != null && at >= 0 && i >= at) ? i + count : i] = rotMap[k];
+  });
+  return out;
+}
+
+// confirmDiscard's 3-way guard buttons: 中止 / 破棄して<what> / 保存してから<what>.
+// Pure so the labels and order are unit-testable (ui_state.test.cjs).
+function discardChoices(what) {
+  return [
+    { id: 'abort', label: '中止' },
+    { id: 'discard', label: '破棄して' + what },
+    { id: 'save', label: '保存してから' + what, primary: true },
+  ];
+}
+
+// Does the follow-up action proceed after the user picked `choice`?
+// 'save' proceeds only when the save actually succeeded; 中止/Escape never proceeds.
+function discardProceeds(choice, saveOk) {
+  if (choice === 'save') return !!saveOk;
+  return choice === 'discard';
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     clampPage, clampDpi, computeScale, fmtZoom, viewRectToPdf, pdfRectToView, rectTooSmall,
     basename, sanitizeFilename, allowedKeys, canDeletePage, formatApiError,
-    nextDpiForScale, ocrLayerSummary, replaceSummary, redactPipeline, redactFill, redactCallSpecs,
+    nextDpiForScale, ocrLayerSummary, replaceSummary, redactFill, redactCallSpecs,
+    pageGuardBlock, remapRotAfterDelete, remapRotAfterInsert,
+    discardChoices, discardProceeds,
   };
 }
 
@@ -173,6 +216,7 @@ function boot() {
     size: [0, 0], fonts: [],
     sel: null,                       // [x0,y0,x1,y1] in PDF pt (y-up), page-local — zoom-invariant
     rot: {},                         // page -> applied rotation (UI-tracked)
+    pages_meta: [],                  // per-page native {rot,crop_x0,crop_y0} (guard, Task 6)
     view: { bmpW: 0, bmpH: 0, ptW: 0, ptH: 0, renderDpi: 120, token: 0 },
     lastSelPage: null,
     desktop: null,                   // null=unknown, true/false once probed
@@ -252,6 +296,7 @@ function boot() {
     state.size = j.size || [0, 0];
     state.fonts = j.fonts || [];
     state.rot = {};
+    state.pages_meta = Array.isArray(j.pages_meta) ? j.pages_meta : [];
     clearSelection(false);
     renderFonts();
     el.docName.textContent = state.name || '無題';
@@ -335,7 +380,7 @@ function boot() {
       setBusy(false); setMsg('✗ 別名保存: ' + formatApiError(e), 'err'); return;
     }
     setBusy(false);
-    if (!pick || !pick.path) { setMsg('別名保存のをキャンセルしました'); return; } // cancel: doc kept, dirty kept
+    if (!pick || !pick.path) { setMsg('別名保存をキャンセルしました'); return; } // cancel: doc kept, dirty kept
     const j = await run('別名保存', () => api('/api/save', { method: 'POST', body: { path: pick.path } }));
     if (j) { afterSave(j); setMsg('別名保存しました: ' + basename(j.saved), 'ok'); }
   }
@@ -360,11 +405,58 @@ function boot() {
     updateDirty();
   }
 
+  /* ---------- DOM confirm dialog (native confirm() is unreliable in WebView2) ---------- */
+  let confirmResolve = null;
+  function confirmOpen() { return !$('#confirmModal').hidden; }
+  function settleConfirm(id) {
+    $('#confirmModal').hidden = true;
+    const r = confirmResolve;
+    confirmResolve = null;
+    if (r) r(id);
+  }
+  function askConfirm(opts) {
+    if (confirmResolve) settleConfirm(null);        // never stack dialogs
+    $('#confirmTitle').textContent = opts.title || '確認';
+    const text = $('#confirmText');
+    text.textContent = opts.text || '';
+    text.hidden = !opts.text;
+    const wrap = $('#confirmActions');
+    wrap.innerHTML = '';
+    (opts.buttons || []).forEach((b) => {
+      const btn = document.createElement('button');
+      btn.textContent = b.label;
+      if (b.primary) btn.className = 'primary';
+      btn.addEventListener('click', () => settleConfirm(b.id));
+      wrap.appendChild(btn);
+    });
+    $('#confirmModal').hidden = false;
+    const first = wrap.querySelector('.primary') || wrap.querySelector('button');
+    if (first) first.focus();                       // Enter/Space hit the primary
+    return new Promise((resolve) => { confirmResolve = resolve; });
+  }
+  // Generic OK/cancel confirm — drop-in replacement for the native confirm() call sites.
+  async function uiConfirm(text, opts) {
+    opts = opts || {};
+    const id = await askConfirm({
+      title: opts.title || '確認',
+      text: text,
+      buttons: [
+        { id: 'cancel', label: opts.cancelLabel || 'キャンセル' },
+        { id: 'ok', label: opts.okLabel || 'OK', primary: true },
+      ],
+    });
+    return id === 'ok';
+  }
+
   async function confirmDiscard(what) {
     if (!state.dirty) return true;
-    const save = window.confirm('未保存の変更があります。\nOK=保存してから' + what + ' / キャンセル=破棄して' + what);
-    if (save) return !!(await saveFlow()); // save first; abort the follow-up if the save failed
-    return true;                            // discard and proceed
+    const choice = await askConfirm({
+      title: '未保存の変更',
+      text: '保存せず続行すると現在の変更は失われます。',
+      buttons: discardChoices(what),
+    });
+    // save first; abort the follow-up when the save failed or was cancelled
+    return discardProceeds(choice, choice === 'save' ? await saveFlow() : undefined);
   }
 
   function updateDirty() {
@@ -607,18 +699,22 @@ function boot() {
     const pno = state.pno; // pin the page ONCE: every call below must hit the same page
     const rect = selPt();
     if (!rect) { setMsg('先にPDF上をドラッグして範囲を選択してください', 'warn'); return; }
-    if ((state.rot[pno] || 0) % 360 !== 0) {
-      setMsg('⚠ このページは回転済みのため、見えている位置とずれる恐れがあります。墨消しを中止しました', 'warn');
+    if (pageGuardBlock(pno, state.rot, state.pages_meta)) {
+      setMsg('回転/CropBox設定があるページは誤消去防止のため中止', 'warn');
       return;
     }
     const target = $('#redactTarget').value;
     const fill = redactFill($('#redactFill').value);
-    const calls = redactCallSpecs(pno, rect, target, fill);
+    const calls = redactCallSpecs(pno, rect, target, fill); // text_image = 1 request (img:true)
     await run('墨消し', async () => {
       const notes = [];
       for (const c of calls) {
         const j = await api(c.path, { method: 'POST', body: c.body });
-        if (c.kind === 'redact') {
+        if (c.kind === 'both') {
+          const a = j.applied || {};
+          notes.push('文字 削除' + (a.dropped || 0) + '・塗り' + (a.filled || 0)
+            + ' / 画像 ' + ((a.img_edited && a.img_edited.length) || 0) + '枚');
+        } else if (c.kind === 'redact') {
           notes.push('文字 ' + (j.applied ? ('削除' + j.applied.dropped + '・塗り' + j.applied.filled) : 'ok'));
         } else {
           notes.push('画像 ' + (j.edited ? j.edited.length : 0) + '枚');
@@ -732,10 +828,13 @@ function boot() {
   async function doDeletePage() {
     if (!state.pages) return;
     if (!canDeletePage(state.pages)) { setMsg('最後の1ページは削除できません', 'warn'); return; }
-    if (!window.confirm('現在のページ p' + (state.pno + 1) + ' を削除しますか？')) return;
+    const pno = state.pno; // pin: remap of rot/pages must match the deleted index
+    if (!await uiConfirm('現在のページ p' + (pno + 1) + ' を削除しますか？', { okLabel: '削除する' })) return;
     await run('ページ削除', async () => {
-      const j = await api('/api/pages/delete', { method: 'POST', body: { pnos: [state.pno] } });
+      const j = await api('/api/pages/delete', { method: 'POST', body: { pnos: [pno] } });
       state.pages = j.pages | 0;            // FIX: adopt new page count
+      state.rot = remapRotAfterDelete(state.rot, pno);          // Task 6: 番号ずれ対策
+      state.pages_meta = Array.isArray(j.pages_meta) ? j.pages_meta : state.pages_meta;
       state.pno = clampPage(state.pno, state.pages);
       state.dirty = true; updateDirty();
       state.size = [0, 0]; state.view.ptW = state.view.ptH = 0;
@@ -749,9 +848,13 @@ function boot() {
   async function doInsertPdf() {
     const p = $('#insertPath').value.trim();
     if (!p) { setMsg('追加するPDFのパスを入力してください', 'warn'); return; }
+    const at = null;                       // UI always appends at the end
     await run('ページ追加', async () => {
-      const j = await api('/api/insert', { method: 'POST', body: { path: p, at: null } });
+      const j = await api('/api/insert', { method: 'POST', body: { path: p, at: at } });
+      const added = Math.max(0, (j.pages | 0) - state.pages);
       state.pages = j.pages | 0;            // FIX: adopt new page count
+      state.rot = remapRotAfterInsert(state.rot, at, added);    // Task 6: 番号ずれ対策
+      state.pages_meta = Array.isArray(j.pages_meta) ? j.pages_meta : state.pages_meta;
       state.dirty = true; updateDirty();
       state.size = [0, 0]; state.view.ptW = state.view.ptH = 0;
       state.pno = clampPage(state.pno, state.pages);
@@ -836,7 +939,8 @@ function boot() {
     });
   }
   async function doSanitize() {
-    if (!window.confirm('JavaScript・添付ファイル・文書メタデータ・注釈・リンクを除去した複製を作成しますか？\n\n※本文中の文字として書かれた個人情報は消えません。')) return;
+    if (!await uiConfirm('JavaScript・添付ファイル・文書メタデータ・注釈・リンクを除去した複製を作成しますか？\n\n※本文中の文字として書かれた個人情報は消えません。',
+      { title: '文書情報の削除', okLabel: '複製を作成' })) return;
     await run('文書情報の削除', async () => {
       const j = await api('/api/sanitize', { method: 'POST', body: {} });
       setMsg('文書情報の削除: ' + basename(j.out) + ' (js:' + j.js + ' files:' + j.files + ' meta:' + j.meta + ')', 'ok');
@@ -850,6 +954,8 @@ function boot() {
       const j = await api(redo ? '/api/redo' : '/api/undo', { method: 'POST', body: { page: state.pno } });
       state.pages = j.pages | 0;
       state.pno = clampPage(j.page | 0, state.pages);
+      state.rot = {};                   // server restored the bytes; UI rotations are gone
+      state.pages_meta = Array.isArray(j.pages_meta) ? j.pages_meta : state.pages_meta;
       state.dirty = !!j.dirty; updateDirty();
       state.size = [0, 0]; state.view.ptW = state.view.ptH = 0;
       clearSelection(false);
@@ -951,6 +1057,8 @@ function boot() {
     try { j = await api('/api/reload', { method: 'POST', body: { page: state.pno } }); } catch (e) { return; }
     state.pages = j.pages | 0;
     state.pno = clampPage(j.page, state.pages);
+    state.rot = {};                     // fresh from disk: no in-memory rotation survives
+    state.pages_meta = Array.isArray(j.pages_meta) ? j.pages_meta : [];  // Task 6: ガード用に再取得
     state.lastStat = j.stat; state.stat = j.stat;
     state.dirty = false;
     buildThumbs();
@@ -960,6 +1068,10 @@ function boot() {
 
   /* ---------- keyboard ---------- */
   function onKey(e) {
+    if (confirmOpen()) {                    // modal dialog swallows every shortcut
+      if (e.key === 'Escape') { e.preventDefault(); settleConfirm(null); }
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     const k = (e.key || '').toLowerCase();
     if (mod && k === 'o') { e.preventDefault(); openFlow(); return; }
@@ -1044,6 +1156,9 @@ function boot() {
     $('#openPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') doFallbackOpen(); });
     $('#btnPickFile').addEventListener('click', () => $('#fileInput').click());
     $('#fileInput').addEventListener('change', (e) => doUploadFile(e.target.files && e.target.files[0]));
+
+    // confirm dialog: backdrop click = 中止
+    $('#confirmModal').addEventListener('click', (e) => { if (e.target.id === 'confirmModal') settleConfirm(null); });
 
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', () => { if (state.fit !== 'custom') applyLayout(); });

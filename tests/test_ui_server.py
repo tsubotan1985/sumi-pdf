@@ -91,6 +91,53 @@ def test_save_in_place_keeps_working(tmp_path):
     assert sv.file_info()["saved"] == sv.file_info()["disk"]
 
 
+def test_save_in_place_failure_returns_400_and_leaves_document_untouched(tmp_path, monkeypatch):
+    """Same-path overwrite shares the save-as failure contract: 400 detail, doc untouched."""
+    p = tmp_path / "doc.pdf"
+    original = _sample_bytes()
+    p.write_bytes(original)
+    sv.open_pdf(sv.OpenReq(path=str(p)))
+    sv.S["dirty"] = True
+
+    def locked_replace(src, dst):
+        raise PermissionError(13, "target open in another viewer")
+
+    monkeypatch.setattr(os, "replace", locked_replace)
+
+    with pytest.raises(HTTPException) as exc:
+        sv.do_save(sv.SaveReq())
+
+    assert exc.value.status_code == 400
+    assert "cannot save" in exc.value.detail
+    assert sv.S["path"] == str(p)             # current document unchanged
+    assert sv.S["dirty"] is True              # still unsaved
+    assert p.read_bytes() == original         # no partial overwrite of the target
+    assert [f.name for f in tmp_path.glob("*.pdf")] == ["doc.pdf"]   # tmp debris swept
+
+
+def test_save_in_place_failure_sweeps_tmp_debris(tmp_path, monkeypatch):
+    """A failed save_optimized must not leave its half-written tmp next to the doc."""
+    p = tmp_path / "doc.pdf"
+    p.write_bytes(_sample_bytes())
+    sv.open_pdf(sv.OpenReq(path=str(p)))
+    sv.S["dirty"] = True
+
+    def half_written_then_fail(data, dst):
+        with open(dst, "wb") as fh:           # simulate a partially written tmp
+            fh.write(b"partial debris")
+        raise OSError("engine exploded mid-write")
+
+    monkeypatch.setattr(sv.E, "save_optimized", half_written_then_fail)
+
+    with pytest.raises(HTTPException) as exc:
+        sv.do_save(sv.SaveReq())
+
+    assert exc.value.status_code == 400
+    assert "cannot save" in exc.value.detail
+    assert [f.name for f in tmp_path.glob("*.pdf")] == ["doc.pdf"]   # debris gone
+    assert sv.S["dirty"] is True
+
+
 # ------------------------------------------------------------------ upload
 
 def test_upload_opens_temp_copy_and_resets_state():
